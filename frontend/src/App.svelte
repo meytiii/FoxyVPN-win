@@ -56,6 +56,7 @@
   // Timer for connected duration
   let connectedSeconds = 0;
   let timerInterval: any = null;
+  let pollInterval: any = null;
 
   onMount(async () => {
     try {
@@ -71,25 +72,48 @@
       console.error('Failed to fetch countries:', e);
     }
 
-    EventsOn('vpn:status', (newStatus: core.VpnStatus) => {
-      status = newStatus;
-      if (status.state === 'CONNECTED' && !timerInterval) {
-        timerInterval = setInterval(() => {
-          connectedSeconds++;
-        }, 1000);
-      } else if (status.state !== 'CONNECTED') {
-        if (timerInterval) {
-          clearInterval(timerInterval);
-          timerInterval = null;
+    try {
+      EventsOn('vpn:status', (newStatus: core.VpnStatus) => {
+        status = newStatus;
+        if (status.state === 'CONNECTED' && !timerInterval) {
+          timerInterval = setInterval(() => {
+            connectedSeconds++;
+          }, 1000);
+        } else if (status.state !== 'CONNECTED') {
+          if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+          }
+          connectedSeconds = 0;
         }
-        connectedSeconds = 0;
-      }
-    });
+      });
+    } catch (e) {
+      console.warn('EventsOn binding error:', e);
+    }
+
+    pollInterval = setInterval(async () => {
+      try {
+        const s = await GetStatus();
+        if (s) {
+          status = s;
+          if (status.state === 'CONNECTED' && !timerInterval) {
+            timerInterval = setInterval(() => {
+              connectedSeconds++;
+            }, 1000);
+          } else if (status.state !== 'CONNECTED' && timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+            connectedSeconds = 0;
+          }
+        }
+      } catch (e) {}
+    }, 1500);
   });
 
   onDestroy(() => {
-    EventsOff('vpn:status');
+    try { EventsOff('vpn:status'); } catch (e) {}
     if (timerInterval) clearInterval(timerInterval);
+    if (pollInterval) clearInterval(pollInterval);
   });
 
   async function handleToggleConnect() {
@@ -255,7 +279,9 @@
     <div class="orbital-glow" class:connected={status.state === 'CONNECTED'} class:connecting={status.state === 'CONNECTING'}></div>
     
     <button 
+      type="button"
       class="power-orb" 
+      aria-label="Toggle VPN Connection"
       class:connected={status.state === 'CONNECTED'} 
       class:connecting={status.state === 'CONNECTING'}
       class:error={status.state === 'ERROR'}
@@ -367,16 +393,10 @@
       role="dialog" 
       aria-modal="true" 
       tabindex="-1"
-      on:click={() => showLocationModal = false}
+      on:click={(e) => { if (e.target === e.currentTarget) showLocationModal = false; }}
       on:keydown={(e) => { if (e.key === 'Escape') showLocationModal = false; }}
     >
-      <div 
-        class="modal-card" 
-        role="document"
-        tabindex="-1"
-        on:click|stopPropagation 
-        on:keydown|stopPropagation
-      >
+      <div class="modal-card" role="document">
         <div class="modal-header">
           <h3>Select Exit Location</h3>
           <button class="close-btn" on:click={() => showLocationModal = false}>✕</button>
@@ -420,16 +440,10 @@
       role="dialog" 
       aria-modal="true" 
       tabindex="-1"
-      on:click={() => showAccountModal = false}
+      on:click={(e) => { if (e.target === e.currentTarget) showAccountModal = false; }}
       on:keydown={(e) => { if (e.key === 'Escape') showAccountModal = false; }}
     >
-      <div 
-        class="modal-card" 
-        role="document"
-        tabindex="-1"
-        on:click|stopPropagation 
-        on:keydown|stopPropagation
-      >
+      <div class="modal-card" role="document">
         <div class="modal-header">
           <h3>Firefox Accounts</h3>
           <button class="close-btn" on:click={() => showAccountModal = false}>✕</button>
@@ -493,7 +507,6 @@
                   placeholder="6-digit code"
                   class="font-mono text-center text-lg"
                   disabled={authLoading}
-                  autofocus
                 />
               </div>
 
@@ -514,16 +527,10 @@
       role="dialog" 
       aria-modal="true" 
       tabindex="-1"
-      on:click={() => showSettingsModal = false}
+      on:click={(e) => { if (e.target === e.currentTarget) showSettingsModal = false; }}
       on:keydown={(e) => { if (e.key === 'Escape') showSettingsModal = false; }}
     >
-      <div 
-        class="modal-card" 
-        role="document"
-        tabindex="-1"
-        on:click|stopPropagation 
-        on:keydown|stopPropagation
-      >
+      <div class="modal-card" role="document">
         <div class="modal-header">
           <h3>Tunnel Settings</h3>
           <button class="close-btn" on:click={() => showSettingsModal = false}>✕</button>

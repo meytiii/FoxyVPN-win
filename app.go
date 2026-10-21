@@ -35,7 +35,9 @@ func (a *App) startup(ctx context.Context) {
 				runtime.EventsEmit(a.ctx, "vpn:status", status)
 			}
 		})
-		_, _ = a.service.RestoreSession()
+		go func() {
+			_, _ = a.service.RestoreSession()
+		}()
 	}
 }
 

@@ -367,6 +367,7 @@
   }
   .country-list {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 12px 16px;
     display: flex;
@@ -374,6 +375,7 @@
     gap: 8px;
   }
   .country-group {
+    flex-shrink: 0;
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 12px;
@@ -389,11 +391,13 @@
     background: rgba(255, 102, 0, 0.06);
   }
   .country-row {
+    min-height: 52px;
     padding: 12px 14px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     cursor: pointer;
+    flex-shrink: 0;
   }
   .country-info {
     display: flex;
@@ -402,6 +406,13 @@
   }
   .flag-icon {
     font-size: 1.4rem;
+    font-family: 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
   }
   .name-box {
     display: flex;
@@ -464,6 +475,7 @@
     flex-direction: column;
   }
   .city-row {
+    min-height: 40px;
     padding: 10px 14px 10px 38px;
     display: flex;
     justify-content: space-between;
@@ -471,6 +483,7 @@
     cursor: pointer;
     border-bottom: 1px solid rgba(255, 255, 255, 0.02);
     transition: background 0.15s;
+    flex-shrink: 0;
   }
   .city-row:hover {
     background: rgba(255, 255, 255, 0.03);

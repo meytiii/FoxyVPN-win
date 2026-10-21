@@ -377,6 +377,7 @@
   }
   .tab-body {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 16px 20px;
     display: flex;
@@ -392,6 +393,7 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 10px;
     cursor: pointer;
+    flex-shrink: 0;
   }
   .setting-item input[type="checkbox"] {
     accent-color: var(--fox-primary);

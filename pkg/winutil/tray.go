@@ -1,30 +1,40 @@
 package winutil
 
 import (
+	_ "embed"
+	"encoding/binary"
 	"runtime"
 	"sync"
 	"syscall"
 	"unsafe"
 )
 
+//go:embed icon.ico
+var embeddedAppIcon []byte
+
 var (
-	shell32              = syscall.NewLazyDLL("shell32.dll")
-	user32               = syscall.NewLazyDLL("user32.dll")
-	procShellNotifyIconW = shell32.NewProc("Shell_NotifyIconW")
-	procRegisterClassExW = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW  = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
-	procDestroyWindow    = user32.NewProc("DestroyWindow")
-	procPostQuitMessage  = user32.NewProc("PostQuitMessage")
-	procGetMessageW      = user32.NewProc("GetMessageW")
-	procTranslateMessage = user32.NewProc("TranslateMessage")
-	procDispatchMessageW = user32.NewProc("DispatchMessageW")
-	procCreatePopupMenu  = user32.NewProc("CreatePopupMenu")
-	procAppendMenuW      = user32.NewProc("AppendMenuW")
-	procTrackPopupMenu   = user32.NewProc("TrackPopupMenu")
-	procSetForeground    = user32.NewProc("SetForegroundWindow")
-	procGetCursorPos     = user32.NewProc("GetCursorPos")
-	procLoadIconW        = user32.NewProc("LoadIconW")
+	shell32                      = syscall.NewLazyDLL("shell32.dll")
+	user32                       = syscall.NewLazyDLL("user32.dll")
+	procShellNotifyIconW         = shell32.NewProc("Shell_NotifyIconW")
+	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW           = user32.NewProc("DefWindowProcW")
+	procDestroyWindow            = user32.NewProc("DestroyWindow")
+	procPostQuitMessage          = user32.NewProc("PostQuitMessage")
+	procGetMessageW              = user32.NewProc("GetMessageW")
+	procTranslateMessage         = user32.NewProc("TranslateMessage")
+	procDispatchMessageW         = user32.NewProc("DispatchMessageW")
+	procCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
+	procAppendMenuW              = user32.NewProc("AppendMenuW")
+	procTrackPopupMenu           = user32.NewProc("TrackPopupMenu")
+	procSetForeground            = user32.NewProc("SetForegroundWindow")
+	procGetCursorPos             = user32.NewProc("GetCursorPos")
+	procLoadIconW                = user32.NewProc("LoadIconW")
+	procExtractIconExW           = shell32.NewProc("ExtractIconExW")
+	procCreateIconFromResourceEx = user32.NewProc("CreateIconFromResourceEx")
+	procGetModuleFileNameW       = kernel32.NewProc("GetModuleFileNameW")
+	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
+	procLoadImageW               = user32.NewProc("LoadImageW")
 )
 
 const (
@@ -203,8 +213,8 @@ func StartTray(tooltip string, onShow, onToggle, onQuit func()) (*TrayManager, e
 		}
 		tm.hwnd = syscall.Handle(hwnd)
 
-		// Load standard application icon
-		hIcon, _, _ := procLoadIconW.Call(0, uintptr(32512)) // IDI_APPLICATION = 32512
+		// Load application icon (from exe resources or embedded icon.ico)
+		hIcon := loadAppTrayIcon()
 
 		nid := notifyIconData{
 			cbSize:           uint32(unsafe.Sizeof(notifyIconData{})),
@@ -274,3 +284,121 @@ func (t *TrayManager) Close() {
 		procPostQuitMessage.Call(0)
 	}
 }
+
+// loadAppTrayIcon resolves the best available icon handle for FoxyVPN in the system tray.
+// Priority:
+// 1. Extract icon from running executable (FoxyVPN.exe) via ExtractIconExW
+// 2. Parse and instantiate from embedded icon.ico via CreateIconFromResourceEx
+// 3. Load from process module instance via LoadImageW / LoadIconW
+// 4. Fallback to standard Windows application icon
+func loadAppTrayIcon() syscall.Handle {
+	// 1. Extract from running executable
+	var pathBuf [512]uint16
+	n, _, _ := procGetModuleFileNameW.Call(0, uintptr(unsafe.Pointer(&pathBuf[0])), uintptr(len(pathBuf)))
+	if n > 0 {
+		var hIconSmall syscall.Handle
+		ret, _, _ := procExtractIconExW.Call(
+			uintptr(unsafe.Pointer(&pathBuf[0])),
+			0, // first icon index
+			0, // phiconLarge
+			uintptr(unsafe.Pointer(&hIconSmall)),
+			1,
+		)
+		if ret > 0 && hIconSmall != 0 {
+			return hIconSmall
+		}
+	}
+
+	// 2. Load from embedded icon.ico
+	if len(embeddedAppIcon) >= 22 {
+		if h := createIconFromIcoBytes(embeddedAppIcon); h != 0 {
+			return h
+		}
+	}
+
+	// 3. Try module handle
+	hModule, _, _ := procGetModuleHandleW.Call(0)
+	if hModule != 0 {
+		hIcon, _, _ := procLoadImageW.Call(hModule, uintptr(1), 1 /* IMAGE_ICON */, 16, 16, 0x00008000 /* LR_SHARED */)
+		if hIcon != 0 {
+			return syscall.Handle(hIcon)
+		}
+		hIcon2, _, _ := procLoadIconW.Call(hModule, uintptr(1))
+		if hIcon2 != 0 {
+			return syscall.Handle(hIcon2)
+		}
+	}
+
+	// 4. Default fallback
+	hFallback, _, _ := procLoadIconW.Call(0, uintptr(32512)) // IDI_APPLICATION
+	return syscall.Handle(hFallback)
+}
+
+func createIconFromIcoBytes(ico []byte) syscall.Handle {
+	if len(ico) < 6 {
+		return 0
+	}
+	// Verify reserved (0) and type (1 = icon)
+	if ico[0] != 0 || ico[1] != 0 || ico[2] != 1 || ico[3] != 0 {
+		return 0
+	}
+	count := int(binary.LittleEndian.Uint16(ico[4:6]))
+	if count <= 0 || len(ico) < 6+count*16 {
+		return 0
+	}
+
+	type iconDirEntry struct {
+		width  int
+		height int
+		size   uint32
+		offset uint32
+	}
+	var entries []iconDirEntry
+	for i := 0; i < count; i++ {
+		offset := 6 + i*16
+		w := int(ico[offset])
+		if w == 0 {
+			w = 256
+		}
+		h := int(ico[offset+1])
+		if h == 0 {
+			h = 256
+		}
+		size := binary.LittleEndian.Uint32(ico[offset+8 : offset+12])
+		imgOffset := binary.LittleEndian.Uint32(ico[offset+12 : offset+16])
+		entries = append(entries, iconDirEntry{width: w, height: h, size: size, offset: imgOffset})
+	}
+
+	var bestEntry *iconDirEntry
+	// Prefer 16x16, then 32x32, then first entry
+	for i := range entries {
+		e := &entries[i]
+		if e.width == 16 || e.width == 32 {
+			bestEntry = e
+			if e.width == 16 {
+				break
+			}
+		}
+	}
+	if bestEntry == nil && len(entries) > 0 {
+		bestEntry = &entries[0]
+	}
+
+	if bestEntry != nil && int(bestEntry.offset+bestEntry.size) <= len(ico) {
+		raw := ico[bestEntry.offset : bestEntry.offset+bestEntry.size]
+		hIcon, _, _ := procCreateIconFromResourceEx.Call(
+			uintptr(unsafe.Pointer(&raw[0])),
+			uintptr(len(raw)),
+			1,          // TRUE = icon
+			0x00030000, // dwVersion (Windows 3.0+)
+			16,         // cxDesired
+			16,         // cyDesired
+			0,          // LR_DEFAULTCOLOR
+		)
+		if hIcon != 0 {
+			return syscall.Handle(hIcon)
+		}
+	}
+	return 0
+}
+

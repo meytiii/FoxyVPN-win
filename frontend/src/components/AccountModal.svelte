@@ -166,6 +166,9 @@
   .modal-box {
     width: 90%;
     max-width: 420px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
     background: #0f121d;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 16px;
@@ -178,6 +181,7 @@
     align-items: center;
     padding: 16px 20px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
   }
   .modal-header h3 {
     margin: 0;
@@ -203,6 +207,8 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    overflow-y: auto;
+    min-height: 0;
   }
   .profile-card {
     display: flex;

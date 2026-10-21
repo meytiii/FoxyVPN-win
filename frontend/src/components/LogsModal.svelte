@@ -271,6 +271,7 @@
   }
   .logs-console {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 12px 16px;
     font-family: var(--font-mono);
@@ -290,6 +291,7 @@
     gap: 8px;
     line-height: 1.4;
     word-break: break-all;
+    flex-shrink: 0;
   }
   .log-time {
     color: var(--text-dim);

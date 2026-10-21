@@ -2,3 +2,8 @@ ANDROID/
 ANALYSIS.md
 .agents/
 AGENTS.md
+build/bin/
+frontend/dist/
+frontend/node_modules/
+node_modules/
+*.exe

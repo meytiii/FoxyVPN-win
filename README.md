@@ -99,6 +99,12 @@
 
 ---
 
+## Credits & Acknowledgements
+
+- **Original Android Application**: Special thanks to **[Vauth](https://github.com/Vauth)** and the contributors of the original **[FoxyVPN (Android)](https://github.com/Vauth/FoxyVPN)** repository. Their reverse engineering, research into Mozilla's Firefox Accounts authentication flow, Fastly bot challenge negotiation, and Guardian proxy pass architecture provided the foundational protocol reference for this Windows desktop port.
+
+---
+
 ## License & Disclaimer
 
 This project is an independent open-source tool and is not affiliated with, endorsed by, or sponsored by Mozilla Corporation or Fastly. All product names, logos, and brands are property of their respective owners.

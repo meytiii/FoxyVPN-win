@@ -14,6 +14,7 @@
   } from '../wailsjs/go/main/App.js';
   import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
   import type { core, remotesettings } from '../wailsjs/go/models';
+  import foxyLogo from './assets/images/foxy-logo.png';
 
   // Live VPN state
   let status: core.VpnStatus = {
@@ -239,17 +240,7 @@
   <header class="app-header">
     <div class="brand">
       <div class="fox-icon-wrapper">
-        <svg class="fox-icon" viewBox="0 0 32 32" fill="none">
-          <path d="M16 2L20 8L28 7L24 15L28 24L19 23L16 30L13 23L4 24L8 15L4 7L12 8L16 2Z" fill="url(#fox-grad)" />
-          <path d="M16 8L18 12L23 11L20 16L23 21L18 20L16 25L14 20L9 21L12 16L9 11L14 12L16 8Z" fill="#121520" />
-          <defs>
-            <linearGradient id="fox-grad" x1="4" y1="2" x2="28" y2="30" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#FF7A00" />
-              <stop offset="0.5" stop-color="#FF3D00" />
-              <stop offset="1" stop-color="#D5006D" />
-            </linearGradient>
-          </defs>
-        </svg>
+        <img class="fox-icon" src={foxyLogo} alt="FoxyVPN Shield Logo" />
       </div>
       <div class="brand-info">
         <div class="brand-title">
@@ -603,19 +594,22 @@
   }
 
   .fox-icon-wrapper {
-    width: 36px;
-    height: 36px;
+    width: 38px;
+    height: 38px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 87, 34, 0.1);
+    background: rgba(255, 87, 34, 0.08);
     border: 1px solid var(--border-active);
     border-radius: 10px;
+    padding: 3px;
+    overflow: hidden;
   }
 
   .fox-icon {
-    width: 24px;
-    height: 24px;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
 
   .brand-title {

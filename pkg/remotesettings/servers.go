@@ -118,51 +118,78 @@ func (r *ServerRepository) loadCache() []VpnCountry {
 }
 
 func parseRecords(data []byte) []VpnCountry {
-	var root struct {
-		Data []struct {
-			Country struct {
-				Name   string `json:"name"`
-				Code   string `json:"code"`
-				Cities []struct {
-					Name    string `json:"name"`
-					Code    string `json:"code"`
-					Servers []struct {
-						Hostname    string `json:"hostname"`
-						Port        int    `json:"port"`
-						Quarantined bool   `json:"quarantined"`
-						Protocols   []struct {
-							Name   string `json:"name"`
-							Host   string `json:"host"`
-							Port   int    `json:"port"`
-							Scheme string `json:"scheme"`
-						} `json:"protocols"`
-					} `json:"servers"`
-				} `json:"cities"`
-			} `json:"country"`
-		} `json:"data"`
+	var rawRoot struct {
+		Data []json.RawMessage `json:"data"`
 	}
-
-	if err := json.Unmarshal(data, &root); err != nil {
+	if err := json.Unmarshal(data, &rawRoot); err != nil {
 		return nil
 	}
 
+	type protoJSON struct {
+		Name   string `json:"name"`
+		Host   string `json:"host"`
+		Port   int    `json:"port"`
+		Scheme string `json:"scheme"`
+	}
+
+	type serverJSON struct {
+		Hostname    string      `json:"hostname"`
+		Port        int         `json:"port"`
+		Quarantined bool        `json:"quarantined"`
+		Protocols   []protoJSON `json:"protocols"`
+	}
+
+	type cityJSON struct {
+		Name    string       `json:"name"`
+		Code    string       `json:"code"`
+		Servers []serverJSON `json:"servers"`
+	}
+
+	type itemJSON struct {
+		Name    string     `json:"name"`
+		Code    string     `json:"code"`
+		Cities  []cityJSON `json:"cities"`
+		Country *struct {
+			Name   string     `json:"name"`
+			Code   string     `json:"code"`
+			Cities []cityJSON `json:"cities"`
+		} `json:"country"`
+	}
+
 	var countries []VpnCountry
-	for _, rec := range root.Data {
-		c := rec.Country
-		if strings.EqualFold(c.Name, "CatchAll Anycast") || c.Code == "" || len(c.Cities) == 0 {
+	for _, recRaw := range rawRoot.Data {
+		var item itemJSON
+		if err := json.Unmarshal(recRaw, &item); err != nil {
 			continue
 		}
+
+		name := item.Name
+		code := item.Code
+		citiesList := item.Cities
+
+		if item.Country != nil && item.Country.Code != "" {
+			name = item.Country.Name
+			code = item.Country.Code
+			if len(item.Country.Cities) > 0 {
+				citiesList = item.Country.Cities
+			}
+		}
+
+		if strings.EqualFold(name, "CatchAll Anycast") || code == "" || len(citiesList) == 0 {
+			continue
+		}
+
 		var cities []VpnCity
-		for _, cityRec := range c.Cities {
+		for _, cityRec := range citiesList {
 			var servers []VpnServerNode
 			for _, srv := range cityRec.Servers {
 				var protos []VpnProtocol
-				for _, proto := range srv.Protocols {
+				for _, p := range srv.Protocols {
 					protos = append(protos, VpnProtocol{
-						Name:   proto.Name,
-						Host:   proto.Host,
-						Port:   proto.Port,
-						Scheme: proto.Scheme,
+						Name:   p.Name,
+						Host:   p.Host,
+						Port:   p.Port,
+						Scheme: p.Scheme,
 					})
 				}
 				servers = append(servers, VpnServerNode{
@@ -178,9 +205,10 @@ func parseRecords(data []byte) []VpnCountry {
 				Servers: servers,
 			})
 		}
+
 		countries = append(countries, VpnCountry{
-			Name:   c.Name,
-			Code:   c.Code,
+			Name:   name,
+			Code:   code,
 			Cities: cities,
 		})
 	}
@@ -191,7 +219,7 @@ func parseRecords(data []byte) []VpnCountry {
 func CandidatesForCountry(countries []VpnCountry, countryCode string) []ProxyCandidate {
 	var candidates []ProxyCandidate
 	for _, c := range countries {
-		if !strings.EqualFold(c.Code, countryCode) && countryCode != "" && countryCode != "AUTO" {
+		if !strings.EqualFold(c.Code, countryCode) && countryCode != "" && countryCode != "AUTO" && countryCode != "REC" {
 			continue
 		}
 		for _, city := range c.Cities {
@@ -231,40 +259,38 @@ func resolveServerTarget(server VpnServerNode) (string, int) {
 			return host, port
 		}
 	}
-	return server.Hostname, server.Port
+	port := server.Port
+	if port <= 0 {
+		port = 2499
+	}
+	return server.Hostname, port
 }
 
-// BuiltinFallbackCountries returns hardcoded Fastly edge nodes for Mozilla VPN.
+// BuiltinFallbackCountries returns standard Fastly edge nodes for Mozilla VPN.
 func BuiltinFallbackCountries() []VpnCountry {
 	return []VpnCountry{
+		{
+			Name: "Recommended (Fastest)",
+			Code: "REC",
+			Cities: []VpnCity{
+				{
+					Name: "Anycast Edge",
+					Code: "REC",
+					Servers: []VpnServerNode{
+						{Hostname: "p.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
 		{
 			Name: "United States",
 			Code: "US",
 			Cities: []VpnCity{
 				{
-					Name: "New York",
-					Code: "nyc",
+					Name: "United States",
+					Code: "US",
 					Servers: []VpnServerNode{
-						{
-							Hostname: "us-nyc.secureproxy.mozilla.com",
-							Port:     443,
-							Protocols: []VpnProtocol{
-								{Name: "connect", Host: "us-nyc.secureproxy.mozilla.com", Port: 443},
-							},
-						},
-					},
-				},
-				{
-					Name: "San Jose",
-					Code: "sjc",
-					Servers: []VpnServerNode{
-						{
-							Hostname: "us-sjc.secureproxy.mozilla.com",
-							Port:     443,
-							Protocols: []VpnProtocol{
-								{Name: "connect", Host: "us-sjc.secureproxy.mozilla.com", Port: 443},
-							},
-						},
+						{Hostname: "us.m1.fastly-masque.net", Port: 2499},
 					},
 				},
 			},
@@ -274,35 +300,10 @@ func BuiltinFallbackCountries() []VpnCountry {
 			Code: "DE",
 			Cities: []VpnCity{
 				{
-					Name: "Frankfurt",
-					Code: "fra",
+					Name: "Munich",
+					Code: "MUC",
 					Servers: []VpnServerNode{
-						{
-							Hostname: "de-fra.secureproxy.mozilla.com",
-							Port:     443,
-							Protocols: []VpnProtocol{
-								{Name: "connect", Host: "de-fra.secureproxy.mozilla.com", Port: 443},
-							},
-						},
-					},
-				},
-			},
-		},
-		{
-			Name: "Netherlands",
-			Code: "NL",
-			Cities: []VpnCity{
-				{
-					Name: "Amsterdam",
-					Code: "ams",
-					Servers: []VpnServerNode{
-						{
-							Hostname: "nl-ams.secureproxy.mozilla.com",
-							Port:     443,
-							Protocols: []VpnProtocol{
-								{Name: "connect", Host: "nl-ams.secureproxy.mozilla.com", Port: 443},
-							},
-						},
+						{Hostname: "muc139.m1.fastly-masque.net", Port: 2499},
 					},
 				},
 			},
@@ -313,15 +314,35 @@ func BuiltinFallbackCountries() []VpnCountry {
 			Cities: []VpnCity{
 				{
 					Name: "London",
-					Code: "lon",
+					Code: "EGLC",
 					Servers: []VpnServerNode{
-						{
-							Hostname: "gb-lon.secureproxy.mozilla.com",
-							Port:     443,
-							Protocols: []VpnProtocol{
-								{Name: "connect", Host: "gb-lon.secureproxy.mozilla.com", Port: 443},
-							},
-						},
+						{Hostname: "eglc860.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Netherlands",
+			Code: "NL",
+			Cities: []VpnCity{
+				{
+					Name: "Rotterdam",
+					Code: "EHRD",
+					Servers: []VpnServerNode{
+						{Hostname: "ehrd229.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "France",
+			Code: "FR",
+			Cities: []VpnCity{
+				{
+					Name: "Paris",
+					Code: "LFPB",
+					Servers: []VpnServerNode{
+						{Hostname: "lfpb115.m1.fastly-masque.net", Port: 2499},
 					},
 				},
 			},
@@ -331,16 +352,127 @@ func BuiltinFallbackCountries() []VpnCountry {
 			Code: "CA",
 			Cities: []VpnCity{
 				{
-					Name: "Toronto",
-					Code: "yyz",
+					Name: "Canada",
+					Code: "CA",
 					Servers: []VpnServerNode{
-						{
-							Hostname: "ca-yyz.secureproxy.mozilla.com",
-							Port:     443,
-							Protocols: []VpnProtocol{
-								{Name: "connect", Host: "ca-yyz.secureproxy.mozilla.com", Port: 443},
-							},
-						},
+						{Hostname: "ca.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Japan",
+			Code: "JP",
+			Cities: []VpnCity{
+				{
+					Name: "Tokyo",
+					Code: "RJTF",
+					Servers: []VpnServerNode{
+						{Hostname: "rjtf770.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Singapore",
+			Code: "SG",
+			Cities: []VpnCity{
+				{
+					Name: "Singapore",
+					Code: "WSAT",
+					Servers: []VpnServerNode{
+						{Hostname: "wsat188.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Australia",
+			Code: "AU",
+			Cities: []VpnCity{
+				{
+					Name: "Sydney",
+					Code: "YSBK",
+					Servers: []VpnServerNode{
+						{Hostname: "ysbk106.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Sweden",
+			Code: "SE",
+			Cities: []VpnCity{
+				{
+					Name: "Stockholm",
+					Code: "ESSB",
+					Servers: []VpnServerNode{
+						{Hostname: "essb127.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Finland",
+			Code: "FI",
+			Cities: []VpnCity{
+				{
+					Name: "Helsinki",
+					Code: "HEL",
+					Servers: []VpnServerNode{
+						{Hostname: "hel141.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Spain",
+			Code: "ES",
+			Cities: []VpnCity{
+				{
+					Name: "Madrid",
+					Code: "LETO",
+					Servers: []VpnServerNode{
+						{Hostname: "leto235.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Italy",
+			Code: "IT",
+			Cities: []VpnCity{
+				{
+					Name: "Milan",
+					Code: "MXP",
+					Servers: []VpnServerNode{
+						{Hostname: "mxp69.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Switzerland",
+			Code: "CH",
+			Cities: []VpnCity{
+				{
+					Name: "Zurich",
+					Code: "ZRH",
+					Servers: []VpnServerNode{
+						{Hostname: "zrh.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		},
+		{
+			Name: "Brazil",
+			Code: "BR",
+			Cities: []VpnCity{
+				{
+					Name: "Sao Paulo",
+					Code: "GRU",
+					Servers: []VpnServerNode{
+						{Hostname: "gru.m1.fastly-masque.net", Port: 2499},
 					},
 				},
 			},

@@ -36,7 +36,7 @@ func NewSystemProxyManager() *SystemProxyManager {
 }
 
 // Enable configures Windows to route web traffic through the local proxy servers.
-func (m *SystemProxyManager) Enable(httpProxyAddr, socksProxyAddr string) error {
+func (m *SystemProxyManager) Enable(httpProxyAddr, socksProxyAddr, bypassList string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -63,7 +63,10 @@ func (m *SystemProxyManager) Enable(httpProxyAddr, socksProxyAddr string) error 
 	}
 
 	proxyServerVal := fmt.Sprintf("http=%s;https=%s;socks=%s", httpProxyAddr, httpProxyAddr, socksProxyAddr)
-	proxyOverrideVal := "<-loopback>;<local>;localhost;127.*;10.*;192.168.*"
+	proxyOverrideVal := bypassList
+	if proxyOverrideVal == "" {
+		proxyOverrideVal = "<-loopback>;<local>;localhost;127.*;10.*;192.168.*;172.16.*"
+	}
 
 	if err := k.SetDWordValue("ProxyEnable", 1); err != nil {
 		return fmt.Errorf("failed to set ProxyEnable: %w", err)

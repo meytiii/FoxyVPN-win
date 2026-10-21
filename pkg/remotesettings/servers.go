@@ -212,11 +212,71 @@ func parseRecords(data []byte) []VpnCountry {
 			Cities: cities,
 		})
 	}
+
+	// Ensure "Recommended (REC)" is always the first entry
+	hasRec := false
+	for _, c := range countries {
+		if strings.EqualFold(c.Code, "REC") {
+			hasRec = true
+			break
+		}
+	}
+	if !hasRec {
+		recEntry := VpnCountry{
+			Name: "Recommended",
+			Code: "REC",
+			Cities: []VpnCity{
+				{
+					Name: "Anycast Edge",
+					Code: "REC",
+					Servers: []VpnServerNode{
+						{Hostname: "p.m1.fastly-masque.net", Port: 2499},
+					},
+				},
+			},
+		}
+		countries = append([]VpnCountry{recEntry}, countries...)
+	}
+
 	return countries
+}
+
+// CandidatesForCity returns proxy candidates for a specific country and city.
+func CandidatesForCity(countries []VpnCountry, countryCode, cityCode string) []ProxyCandidate {
+	var candidates []ProxyCandidate
+	for _, c := range countries {
+		if !strings.EqualFold(c.Code, countryCode) && countryCode != "" && countryCode != "REC" && countryCode != "AUTO" {
+			continue
+		}
+		for _, city := range c.Cities {
+			if cityCode != "" && !strings.EqualFold(city.Code, cityCode) {
+				continue
+			}
+			for _, srv := range city.Servers {
+				if srv.Quarantined {
+					continue
+				}
+				host, port := resolveServerTarget(srv)
+				if host == "" || port <= 0 {
+					continue
+				}
+				candidates = append(candidates, ProxyCandidate{
+					Host:        host,
+					Port:        port,
+					CountryCode: c.Code,
+					CountryName: c.Name,
+					CityName:    city.Name,
+					CityCode:    city.Code,
+				})
+			}
+		}
+	}
+	return candidates
 }
 
 // CandidatesForCountry generates a list of operational proxy candidates for a given country code.
 func CandidatesForCountry(countries []VpnCountry, countryCode string) []ProxyCandidate {
+
 	var candidates []ProxyCandidate
 	for _, c := range countries {
 		if !strings.EqualFold(c.Code, countryCode) && countryCode != "" && countryCode != "AUTO" && countryCode != "REC" {

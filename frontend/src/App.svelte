@@ -6,21 +6,23 @@
     GetStatus,
     GetCountries,
     SetSelectedCountry,
-    SetTlsSplitMode,
     SetSystemProxyEnabled,
-    FxaLogin,
-    FxaSubmit2FACode,
-    FxaSignOut
+    PingAllServers
   } from '../wailsjs/go/main/App.js';
   import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
   import type { core, remotesettings } from '../wailsjs/go/models';
   import foxyLogo from './assets/images/foxy-logo.png';
 
-  // Live VPN state
+  import LocationDrawer from './components/LocationDrawer.svelte';
+  import SettingsModal from './components/SettingsModal.svelte';
+  import AccountModal from './components/AccountModal.svelte';
+  import LogsModal from './components/LogsModal.svelte';
+
+  // Live VPN status state
   let status: core.VpnStatus = {
     state: 'DISCONNECTED',
-    selected_country: 'US',
-    selected_city: 'nyc',
+    selected_country: 'REC',
+    selected_city: 'REC',
     connected_node: '',
     ping_ms: 0,
     upload_speed_bytes: 0,
@@ -30,68 +32,86 @@
     quota_limit_bytes: 53687091200,
     quota_remaining_bytes: 53687091200,
     quota_reset_epoch: 0,
+    is_unlimited: false,
     is_signed_in: false,
+    user_email: '',
     tls_split_mode: 1,
     system_proxy_enabled: true,
     socks_port: 1080,
-    http_port: 8080
+    http_port: 8080,
+    socks_bind_address: '127.0.0.1',
+    real_ip: '',
+    real_country: '',
+    exit_ip: '',
+    exit_country: '',
+    is_protected: false,
+    exit_check_enabled: true,
+    dns_provider: 'SYSTEM_DEFAULT',
+    custom_doh_url: '',
+    bootstrap_dns: 'AUTOMATIC',
+    custom_bootstrap_ip: '',
+    custom_edge_address: '',
+    upstream_proxy_enabled: false,
+    upstream_proxy_type: 'SOCKS5',
+    upstream_proxy_host: '',
+    upstream_proxy_port: 1080,
+    minimize_to_tray: true,
+    close_to_tray: true,
+    launch_on_startup: false,
+    bypass_lan: true,
+    custom_bypass_list: '<local>;192.168.*;10.*;172.16.*'
   } as core.VpnStatus;
 
-  // Countries
+  // Countries catalog
   let countries: remotesettings.VpnCountry[] = [];
-  let countrySearch = '';
 
-  // Modals
+  // Modal display toggles
   let showLocationModal = false;
   let showAccountModal = false;
   let showSettingsModal = false;
+  let showLogsModal = false;
 
-  // Auth Form
-  let authEmail = '';
-  let authPassword = '';
-  let auth2FACode = '';
-  let authNeeds2FA = false;
-  let authLoading = false;
-  let authError = '';
-
-  // Timer for connected duration
+  // Connection timer
   let connectedSeconds = 0;
   let timerInterval: any = null;
   let pollInterval: any = null;
+  let isPinging = false;
 
   onMount(async () => {
-    try {
-      const initStatus = await GetStatus();
-      if (initStatus) status = initStatus;
-    } catch (e) {
-      console.error('Failed to get initial status:', e);
-    }
-
+    await refreshStatus();
     try {
       countries = await GetCountries();
     } catch (e) {
-      console.error('Failed to fetch countries:', e);
+      console.error('Failed to fetch countries catalog:', e);
     }
 
     try {
       EventsOn('vpn:status', (newStatus: core.VpnStatus) => {
+        if (!newStatus) return;
+        const prevState = status.state;
         status = newStatus;
-        if (status.state === 'CONNECTED' && !timerInterval) {
-          timerInterval = setInterval(() => {
-            connectedSeconds++;
-          }, 1000);
-        } else if (status.state !== 'CONNECTED') {
+
+        if (status.state === 'CONNECTED') {
+          if (!timerInterval) {
+            timerInterval = setInterval(() => {
+              connectedSeconds++;
+            }, 1000);
+          }
+        } else {
           if (timerInterval) {
             clearInterval(timerInterval);
             timerInterval = null;
           }
-          connectedSeconds = 0;
+          if (status.state === 'DISCONNECTED') {
+            connectedSeconds = 0;
+          }
         }
       });
     } catch (e) {
-      console.warn('EventsOn binding error:', e);
+      console.warn('EventsOn binding warning:', e);
     }
 
+    // Backup polling ticker every 1.5s
     pollInterval = setInterval(async () => {
       try {
         const s = await GetStatus();
@@ -112,10 +132,21 @@
   });
 
   onDestroy(() => {
-    try { EventsOff('vpn:status'); } catch (e) {}
+    try {
+      EventsOff('vpn:status');
+    } catch (e) {}
     if (timerInterval) clearInterval(timerInterval);
     if (pollInterval) clearInterval(pollInterval);
   });
+
+  async function refreshStatus() {
+    try {
+      const s = await GetStatus();
+      if (s) status = s;
+    } catch (e) {
+      console.error('Failed to refresh status:', e);
+    }
+  }
 
   async function handleToggleConnect() {
     if (status.state === 'CONNECTED') {
@@ -127,7 +158,6 @@
     } else if (status.state === 'DISCONNECTED' || status.state === 'ERROR') {
       if (!status.is_signed_in) {
         showAccountModal = true;
-        authError = 'Please sign in to Firefox Accounts first to obtain free VPN pass.';
         return;
       }
       try {
@@ -138,62 +168,43 @@
     }
   }
 
-  async function handleSelectCountry(country: remotesettings.VpnCountry) {
-    const city = country.cities && country.cities.length > 0 ? country.cities[0].code : '';
-    await SetSelectedCountry(country.code, city);
-    status.selected_country = country.code;
-    status.selected_city = city;
-    showLocationModal = false;
-    if (status.state === 'CONNECTED') {
-      await Disconnect();
-      await Connect();
-    }
-  }
-
-  async function handleFxaSubmit() {
-    authError = '';
-    authLoading = true;
+  async function handleSelectLocation(country: string, city: string) {
     try {
-      if (authNeeds2FA) {
-        await FxaSubmit2FACode(auth2FACode);
-        authNeeds2FA = false;
-        auth2FACode = '';
-        showAccountModal = false;
-      } else {
-        const needs2FA = await FxaLogin(authEmail, authPassword);
-        if (needs2FA) {
-          authNeeds2FA = true;
-        } else {
-          showAccountModal = false;
-          authPassword = '';
-        }
+      await SetSelectedCountry(country, city);
+      status.selected_country = country;
+      status.selected_city = city;
+      showLocationModal = false;
+      if (status.state === 'CONNECTED') {
+        await Disconnect();
+        await Connect();
       }
-    } catch (e: any) {
-      authError = e?.message || String(e);
-    } finally {
-      authLoading = false;
-    }
-  }
-
-  async function handleSignOut() {
-    try {
-      await FxaSignOut();
-      status.is_signed_in = false;
-      showAccountModal = false;
     } catch (e) {
-      console.error('Sign out error:', e);
+      console.error('Failed selecting location:', e);
     }
   }
 
   async function toggleSystemProxy() {
     const nextVal = !status.system_proxy_enabled;
-    await SetSystemProxyEnabled(nextVal);
-    status.system_proxy_enabled = nextVal;
+    try {
+      await SetSystemProxyEnabled(nextVal);
+      status.system_proxy_enabled = nextVal;
+    } catch (e) {
+      console.error('Failed toggling system proxy:', e);
+    }
   }
 
-  async function changeTlsSplit(mode: number) {
-    await SetTlsSplitMode(mode);
-    status.tls_split_mode = mode;
+  async function triggerPingCheck(event: MouseEvent) {
+    event.stopPropagation();
+    if (isPinging) return;
+    isPinging = true;
+    try {
+      await PingAllServers();
+      await refreshStatus();
+    } catch (e) {
+      console.warn('Ping check failed:', e);
+    } finally {
+      isPinging = false;
+    }
   }
 
   function formatBytes(bytes: number): string {
@@ -216,23 +227,40 @@
     return `${h.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   }
 
-  $: quotaPercent = status.quota_limit_bytes > 0
-    ? Math.max(0, Math.min(100, (status.quota_remaining_bytes / status.quota_limit_bytes) * 100))
-    : 100;
-
-  $: filteredCountries = countries.filter(c => 
-    c.name.toLowerCase().includes(countrySearch.toLowerCase()) || 
-    c.code.toLowerCase().includes(countrySearch.toLowerCase())
-  );
+  $: quotaPercent = status.is_unlimited
+    ? 100
+    : status.quota_limit_bytes > 0
+      ? Math.max(0, Math.min(100, (status.quota_remaining_bytes / status.quota_limit_bytes) * 100))
+      : 100;
 
   function getCountryFlag(code: string): string {
-    if (!code || code === 'AUTO') return '🌐';
+    if (!code || code === 'REC' || code.length !== 2) return '🌐';
     const codePoints = code
       .toUpperCase()
       .split('')
       .map(char => 127397 + char.charCodeAt(0));
     return String.fromCodePoint(...codePoints);
   }
+
+  $: selectedCountryName = (() => {
+    if (!status.selected_country || status.selected_country === 'REC') {
+      return 'Recommended (Auto)';
+    }
+    const found = countries.find(c => c.code === status.selected_country);
+    return found ? found.name : status.selected_country;
+  })();
+
+  $: selectedCityName = (() => {
+    if (!status.selected_country || status.selected_country === 'REC' || status.selected_city === 'REC') {
+      return 'Fastest Anycast Edge';
+    }
+    const found = countries.find(c => c.code === status.selected_country);
+    if (found && found.cities) {
+      const city = found.cities.find(ct => ct.code === status.selected_city);
+      if (city) return city.name;
+    }
+    return status.selected_city.toUpperCase();
+  })();
 </script>
 
 <div class="app-layout">
@@ -251,23 +279,94 @@
     </div>
 
     <div class="header-actions">
-      <button class="icon-pill" on:click={() => showAccountModal = true} title="Firefox Account">
-        <span class="status-dot" class:active={status.is_signed_in}></span>
-        <span class="pill-label">{status.is_signed_in ? 'FxA Active' : 'Sign In'}</span>
+      <!-- Logs Terminal Modal Trigger -->
+      <button 
+        type="button" 
+        class="icon-btn" 
+        on:click={() => showLogsModal = true} 
+        title="Live Traffic Logs"
+      >
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="4 17 10 11 4 5" />
+          <line x1="12" y1="19" x2="20" y2="19" />
+        </svg>
       </button>
 
-      <button class="icon-btn" on:click={() => showSettingsModal = true} title="Settings">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+      <!-- Settings Modal Trigger -->
+      <button 
+        type="button" 
+        class="icon-btn" 
+        on:click={() => showSettingsModal = true} 
+        title="Tunnel Settings"
+      >
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3" />
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       </button>
+
+      <!-- Firefox Account Pill Trigger -->
+      <button 
+        type="button" 
+        class="icon-pill" 
+        on:click={() => showAccountModal = true} 
+        title="Firefox Account"
+      >
+        <span class="status-dot" class:active={status.is_signed_in}></span>
+        <span class="pill-label">{status.is_signed_in ? (status.user_email ? status.user_email.split('@')[0] : 'FxA Active') : 'Sign In'}</span>
+      </button>
     </div>
   </header>
 
-  <!-- Hero Power Reactor -->
+  <!-- Security State & IP Leak Protection Badge -->
+  <section class="security-card" class:protected={status.is_protected} class:unprotected={!status.is_protected}>
+    <div class="security-left">
+      <div class="shield-indicator" class:secured={status.is_protected}>
+        {#if status.is_protected}
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z" />
+          </svg>
+        {:else}
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+        {/if}
+      </div>
+      <div class="security-info">
+        <div class="security-headline">
+          {status.is_protected ? 'TRAFFIC PROTECTED' : 'UNENCRYPTED CONNECTION'}
+        </div>
+        <div class="security-ip font-mono">
+          {#if status.is_protected}
+            Exit IP: <strong>{status.exit_ip || 'Fastly Edge'}</strong>
+            {#if status.exit_country}
+              <span class="ip-country-badge">{status.exit_country}</span>
+            {/if}
+          {:else}
+            Real IP: <strong>{status.real_ip || 'Exposed'}</strong>
+            {#if status.real_country}
+              <span class="ip-country-badge alert">{status.real_country}</span>
+            {/if}
+          {/if}
+        </div>
+      </div>
+    </div>
+    {#if status.connected_node}
+      <div class="edge-node-badge" title="Active Fastly Edge Node">
+        {status.connected_node}
+      </div>
+    {/if}
+  </section>
+
+  <!-- Hero Power Reactor Orb -->
   <main class="reactor-container">
-    <div class="orbital-glow" class:connected={status.state === 'CONNECTED'} class:connecting={status.state === 'CONNECTING'}></div>
+    <div 
+      class="orbital-glow" 
+      class:connected={status.state === 'CONNECTED'} 
+      class:connecting={status.state === 'CONNECTING'}
+    ></div>
     
     <button 
       type="button"
@@ -290,14 +389,14 @@
 
     <div class="reactor-status">
       {#if status.state === 'CONNECTED'}
-        <div class="status-badge connected">PROTECTED & SECURED</div>
-        <div class="duration-counter">{formatDuration(connectedSeconds)}</div>
+        <div class="status-badge connected">CONNECTED & TUNNELED</div>
+        <div class="duration-counter font-mono">{formatDuration(connectedSeconds)}</div>
       {:else if status.state === 'CONNECTING'}
         <div class="status-badge connecting">ESTABLISHING TUNNEL...</div>
-        <div class="status-hint">Solving challenges & negotiating H2 multiplexing</div>
+        <div class="status-hint">Solving challenge & negotiating HTTP/2 TLS 1.3</div>
       {:else if status.state === 'ERROR'}
         <div class="status-badge error">CONNECTION FAILED</div>
-        <div class="status-hint">{status.error_message || 'Tap to retry connection'}</div>
+        <div class="status-hint">{status.error_message || 'Tap orb to retry connection'}</div>
       {:else}
         <div class="status-badge disconnected">NOT CONNECTED</div>
         <div class="status-hint">Tap orb to initiate HTTP/2 tunnel</div>
@@ -305,25 +404,48 @@
     </div>
   </main>
 
-  <!-- Location Picker Pill -->
+  <!-- Location Picker Card -->
   <section class="location-section">
-    <button type="button" class="location-card" on:click={() => showLocationModal = true}>
+    <div 
+      class="location-card" 
+      role="button" 
+      tabindex="0"
+      on:click={() => showLocationModal = true}
+      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showLocationModal = true; }}
+    >
       <div class="location-flag">{getCountryFlag(status.selected_country)}</div>
       <div class="location-details">
         <div class="location-title">
-          {status.selected_country} - {status.selected_city.toUpperCase()}
+          {selectedCountryName}
         </div>
-        <div class="location-subtitle">Fastly Edge Proxy</div>
+        <div class="location-subtitle">
+          {selectedCityName}
+        </div>
       </div>
       <div class="location-meta">
-        <span class="ping-chip" class:live={status.ping_ms > 0}>
-          ⚡ {status.ping_ms > 0 ? `${status.ping_ms} ms` : 'Standby'}
-        </span>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button 
+          type="button" 
+          class="ping-chip" 
+          class:live={status.ping_ms > 0} 
+          class:spinning={isPinging}
+          on:click={triggerPingCheck}
+          title="Click to test server latencies"
+        >
+          {#if isPinging}
+            <span class="spinner-inline"></span> Pinging...
+          {:else if status.selected_country === 'REC'}
+            ⚡ Auto-Best
+          {:else if status.ping_ms > 0}
+            ⚡ {status.ping_ms} ms
+          {:else}
+            ⚡ Ping
+          {/if}
+        </button>
+        <svg class="chevron-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="9 18 15 12 9 6" />
         </svg>
       </div>
-    </button>
+    </div>
   </section>
 
   <!-- Telemetry Bento Grid -->
@@ -347,15 +469,19 @@
       <div class="bento-sub font-mono">Total {formatBytes(status.total_uploaded_bytes)}</div>
     </div>
 
-    <!-- Free Quota Progress -->
+    <!-- Bandwidth Quota Progress -->
     <div class="bento-card full-span">
       <div class="quota-header">
         <div class="quota-title">
-          <span class="quota-badge">50 GB FREE</span>
+          <span class="quota-badge">{status.is_unlimited ? 'UNLIMITED' : '50 GB FREE'}</span>
           <span>Monthly Bandwidth</span>
         </div>
         <div class="quota-figures font-mono">
-          {formatBytes(status.quota_remaining_bytes)} left
+          {#if status.is_unlimited}
+            Unlimited Pass Active
+          {:else}
+            {formatBytes(status.quota_remaining_bytes)} remaining
+          {/if}
         </div>
       </div>
       <div class="progress-bar-track">
@@ -368,206 +494,52 @@
   <footer class="quick-controls">
     <button type="button" class="toggle-row" on:click={toggleSystemProxy}>
       <div class="toggle-info">
-        <div class="toggle-name">Windows System Proxy</div>
-        <div class="toggle-desc">WinINet route all browsers & applications</div>
+        <div class="toggle-name">Windows System Proxy (WinINet)</div>
+        <div class="toggle-desc">Automatically route Edge, Chrome & Windows apps</div>
       </div>
       <div class="switch" class:active={status.system_proxy_enabled}>
         <div class="switch-handle"></div>
       </div>
     </button>
+
+    <div class="ports-strip">
+      <span class="port-label">Proxy Ports:</span>
+      <span class="port-pill font-mono">SOCKS5 :{status.socks_port}</span>
+      <span class="port-pill font-mono">HTTP :{status.http_port}</span>
+    </div>
   </footer>
 
-  <!-- LOCATION SELECTION MODAL -->
-  {#if showLocationModal}
-    <div 
-      class="modal-backdrop" 
-      role="dialog" 
-      aria-modal="true" 
-      tabindex="-1"
-      on:click={(e) => { if (e.target === e.currentTarget) showLocationModal = false; }}
-      on:keydown={(e) => { if (e.key === 'Escape') showLocationModal = false; }}
-    >
-      <div class="modal-card" role="document">
-        <div class="modal-header">
-          <h3>Select Exit Location</h3>
-          <button class="close-btn" on:click={() => showLocationModal = false}>✕</button>
-        </div>
+  <!-- Modular Modals -->
+  <LocationDrawer 
+    show={showLocationModal} 
+    {countries} 
+    selectedCountryCode={status.selected_country} 
+    selectedCityCode={status.selected_city} 
+    onClose={() => showLocationModal = false} 
+    onSelect={handleSelectLocation} 
+  />
 
-        <div class="search-box">
-          <input 
-            type="text" 
-            placeholder="Search countries or cities..." 
-            bind:value={countrySearch}
-          />
-        </div>
+  <SettingsModal 
+    show={showSettingsModal} 
+    onClose={() => showSettingsModal = false} 
+  />
 
-        <div class="country-list">
-          {#each filteredCountries as c}
-            <button 
-              type="button"
-              class="country-item" 
-              class:selected={c.code === status.selected_country}
-              on:click={() => handleSelectCountry(c)}
-            >
-              <div class="item-flag">{getCountryFlag(c.code)}</div>
-              <div class="item-info">
-                <div class="item-name">{c.name}</div>
-                <div class="item-code">{c.cities?.length || 1} edge location(s)</div>
-              </div>
-              {#if c.code === status.selected_country}
-                <div class="selected-indicator">✓</div>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      </div>
-    </div>
-  {/if}
+  <AccountModal 
+    show={showAccountModal} 
+    isSignedIn={status.is_signed_in} 
+    userEmail={status.user_email || ''} 
+    isUnlimited={status.is_unlimited} 
+    quotaRemainingBytes={status.quota_remaining_bytes} 
+    quotaLimitBytes={status.quota_limit_bytes} 
+    onClose={() => showAccountModal = false} 
+    onAuthSuccess={refreshStatus} 
+    onSignOutSuccess={refreshStatus} 
+  />
 
-  <!-- FIREFOX ACCOUNT MODAL -->
-  {#if showAccountModal}
-    <div 
-      class="modal-backdrop" 
-      role="dialog" 
-      aria-modal="true" 
-      tabindex="-1"
-      on:click={(e) => { if (e.target === e.currentTarget) showAccountModal = false; }}
-      on:keydown={(e) => { if (e.key === 'Escape') showAccountModal = false; }}
-    >
-      <div class="modal-card" role="document">
-        <div class="modal-header">
-          <h3>Firefox Accounts</h3>
-          <button class="close-btn" on:click={() => showAccountModal = false}>✕</button>
-        </div>
-
-        {#if status.is_signed_in}
-          <div class="account-active-view">
-            <div class="account-badge-box">
-              <div class="account-avatar">🦊</div>
-              <div class="account-active-title">Authenticated</div>
-              <div class="account-active-sub">Free 50GB monthly proxy pass active</div>
-            </div>
-            <button class="danger-btn" on:click={handleSignOut}>Sign Out</button>
-          </div>
-        {:else}
-          <form on:submit|preventDefault={handleFxaSubmit} class="auth-form">
-            <p class="auth-intro">
-              Log in with your Firefox Account to activate your monthly 50 GB free proxy quota.
-            </p>
-
-            {#if authError}
-              <div class="alert-error">{authError}</div>
-            {/if}
-
-            {#if !authNeeds2FA}
-              <div class="form-group">
-                <label for="fxa-email">Firefox Account Email</label>
-                <input 
-                  id="fxa-email"
-                  type="email" 
-                  bind:value={authEmail} 
-                  required 
-                  placeholder="name@example.com"
-                  disabled={authLoading}
-                />
-              </div>
-
-              <div class="form-group">
-                <label for="fxa-password">Password</label>
-                <input 
-                  id="fxa-password"
-                  type="password" 
-                  bind:value={authPassword} 
-                  required 
-                  placeholder="••••••••••••"
-                  disabled={authLoading}
-                />
-              </div>
-
-              <button class="primary-btn" type="submit" disabled={authLoading}>
-                {authLoading ? 'Solving Fastly Challenge...' : 'Sign In'}
-              </button>
-            {:else}
-              <div class="form-group">
-                <label for="fxa-2fa">Two-Factor / Email Code</label>
-                <input 
-                  id="fxa-2fa"
-                  type="text" 
-                  bind:value={auth2FACode} 
-                  required 
-                  placeholder="6-digit code"
-                  class="font-mono text-center text-lg"
-                  disabled={authLoading}
-                />
-              </div>
-
-              <button class="primary-btn" type="submit" disabled={authLoading}>
-                {authLoading ? 'Verifying Code...' : 'Confirm 2FA Code'}
-              </button>
-            {/if}
-          </form>
-        {/if}
-      </div>
-    </div>
-  {/if}
-
-  <!-- SETTINGS MODAL -->
-  {#if showSettingsModal}
-    <div 
-      class="modal-backdrop" 
-      role="dialog" 
-      aria-modal="true" 
-      tabindex="-1"
-      on:click={(e) => { if (e.target === e.currentTarget) showSettingsModal = false; }}
-      on:keydown={(e) => { if (e.key === 'Escape') showSettingsModal = false; }}
-    >
-      <div class="modal-card" role="document">
-        <div class="modal-header">
-          <h3>Tunnel Settings</h3>
-          <button class="close-btn" on:click={() => showSettingsModal = false}>✕</button>
-        </div>
-
-        <div class="settings-content">
-          <div class="setting-item">
-            <div class="setting-title">DPI TLS ClientHello Splitting</div>
-            <div class="setting-desc">Circumvents deep packet inspection blocking</div>
-            <div class="pill-group">
-              <button 
-                class="pill-opt" 
-                class:active={status.tls_split_mode === 0}
-                on:click={() => changeTlsSplit(0)}
-              >Off</button>
-              <button 
-                class="pill-opt" 
-                class:active={status.tls_split_mode === 1}
-                on:click={() => changeTlsSplit(1)}
-              >1st Byte</button>
-              <button 
-                class="pill-opt" 
-                class:active={status.tls_split_mode === 2}
-                on:click={() => changeTlsSplit(2)}
-              >SNI Record</button>
-            </div>
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-title">Local Proxy Ports</div>
-            <div class="port-specs font-mono">
-              <div>SOCKS5 Proxy: <span>127.0.0.1:{status.socks_port}</span></div>
-              <div>HTTP/S Proxy: <span>127.0.0.1:{status.http_port}</span></div>
-            </div>
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-title">Protocol</div>
-            <div class="setting-desc font-mono">HTTP/2 CONNECT over TLS 1.3 / Fastly</div>
-          </div>
-        </div>
-
-        <button class="primary-btn" on:click={() => showSettingsModal = false}>Done</button>
-      </div>
-    </div>
-  {/if}
+  <LogsModal 
+    show={showLogsModal} 
+    onClose={() => showLogsModal = false} 
+  />
 </div>
 
 <style>
@@ -576,46 +548,49 @@
     flex-direction: column;
     height: 100vh;
     padding: 16px 20px;
-    gap: 16px;
+    gap: 14px;
     background: transparent;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
-  /* Header */
+  /* App Header */
   .app-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
+    padding-bottom: 2px;
   }
 
   .brand {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
   }
 
   .fox-icon-wrapper {
-    width: 38px;
-    height: 38px;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: rgba(255, 87, 34, 0.12);
+    border: 1px solid rgba(255, 87, 34, 0.25);
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 87, 34, 0.08);
-    border: 1px solid var(--border-active);
-    border-radius: 10px;
-    padding: 3px;
-    overflow: hidden;
+    box-shadow: 0 0 15px rgba(255, 87, 34, 0.2);
   }
 
   .fox-icon {
-    width: 100%;
-    height: 100%;
+    width: 26px;
+    height: 26px;
     object-fit: contain;
   }
 
   .brand-title {
-    font-size: 16px;
+    font-size: 1.15rem;
     font-weight: 800;
     letter-spacing: -0.02em;
+    color: var(--text-white);
   }
 
   .gradient-text {
@@ -625,11 +600,11 @@
   }
 
   .brand-badge {
-    font-size: 10px;
+    font-size: 0.65rem;
+    font-weight: 700;
     color: var(--text-dim);
-    font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.05em;
+    text-transform: uppercase;
   }
 
   .header-actions {
@@ -638,172 +613,271 @@
     gap: 8px;
   }
 
-  .icon-pill {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+  .icon-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
-    padding: 6px 12px;
-    border-radius: 20px;
-    color: var(--text-white);
-    font-size: 12px;
-    font-weight: 600;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .icon-btn:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-white);
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .icon-pill {
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 9px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .icon-pill:hover {
-    border-color: rgba(255, 255, 255, 0.2);
     background: var(--bg-card-hover);
+    color: var(--text-white);
+    border-color: rgba(255, 255, 255, 0.18);
   }
 
   .status-dot {
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: #64748b;
+    box-shadow: 0 0 6px rgba(100, 116, 139, 0.5);
   }
 
   .status-dot.active {
     background: var(--emerald-active);
-    box-shadow: 0 0 8px var(--emerald-active);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
   }
 
-  .icon-btn {
-    width: 34px;
-    height: 34px;
+  /* Security Status Card */
+  .security-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: rgba(18, 22, 34, 0.65);
+    border: 1px solid var(--border-subtle);
+    backdrop-filter: blur(12px);
+    transition: all 0.3s ease;
+  }
+
+  .security-card.protected {
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(16, 185, 129, 0.25);
+  }
+
+  .security-card.unprotected {
+    background: rgba(239, 68, 68, 0.06);
+    border-color: rgba(239, 68, 68, 0.2);
+  }
+
+  .security-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .shield-indicator {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: 10px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.2s;
   }
 
-  .icon-btn:hover {
+  .shield-indicator.secured {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+  }
+
+  .security-headline {
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
     color: var(--text-white);
-    border-color: rgba(255, 255, 255, 0.2);
   }
 
-  /* Power Reactor Hero */
+  .security-ip {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  .ip-country-badge {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    font-weight: 700;
+    margin-left: 4px;
+  }
+
+  .ip-country-badge.alert {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+  }
+
+  .edge-node-badge {
+    font-size: 0.65rem;
+    padding: 3px 7px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+  }
+
+  /* Hero Power Reactor */
   .reactor-container {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 20px 0;
-    position: relative;
+    padding: 24px 0 16px;
   }
 
   .orbital-glow {
     position: absolute;
-    width: 220px;
-    height: 220px;
+    width: 170px;
+    height: 170px;
     border-radius: 50%;
-    background: radial-gradient(circle, rgba(255, 87, 34, 0.2) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(255, 87, 34, 0.25) 0%, transparent 70%);
+    filter: blur(25px);
     pointer-events: none;
     transition: all 0.5s ease;
   }
 
   .orbital-glow.connected {
-    background: radial-gradient(circle, rgba(16, 185, 129, 0.25) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(16, 185, 129, 0.35) 0%, transparent 70%);
   }
 
   .orbital-glow.connecting {
-    background: radial-gradient(circle, rgba(255, 145, 0, 0.3) 0%, transparent 70%);
-    animation: pulse 1.5s infinite alternate;
+    background: radial-gradient(circle, rgba(255, 153, 0, 0.35) 0%, transparent 70%);
+    animation: glow-pulse 1.6s infinite alternate;
   }
 
-  @keyframes pulse {
-    0% { transform: scale(0.9); opacity: 0.5; }
-    100% { transform: scale(1.15); opacity: 0.9; }
+  @keyframes glow-pulse {
+    0% { transform: scale(0.9); opacity: 0.6; }
+    100% { transform: scale(1.15); opacity: 1; }
   }
 
   .power-orb {
-    width: 140px;
-    height: 140px;
-    border-radius: 50%;
-    background: #10131d;
-    border: 2px solid var(--border-subtle);
-    cursor: pointer;
     position: relative;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    border: none;
+    background: #111522;
+    cursor: pointer;
+    outline: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), inset 0 2px 4px rgba(255, 255, 255, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  .power-orb:hover {
+  .power-orb:hover:not(:disabled) {
     transform: scale(1.03);
-    border-color: rgba(255, 255, 255, 0.25);
   }
 
-  .power-orb:active {
+  .power-orb:active:not(:disabled) {
     transform: scale(0.97);
   }
 
-  .power-orb.connected {
-    border-color: var(--border-success);
-    box-shadow: var(--emerald-glow);
-  }
-
-  .power-orb.connecting {
-    border-color: var(--border-active);
-    box-shadow: var(--fox-glow);
-  }
-
-  .power-orb.error {
-    border-color: var(--crimson-err);
-    box-shadow: 0 0 30px rgba(239, 68, 68, 0.35);
+  .power-ring-outer {
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 2px dashed rgba(255, 87, 34, 0.3);
+    transition: all 0.4s ease;
   }
 
   .power-ring-inner {
     width: 90px;
     height: 90px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: linear-gradient(135deg, #1b2030 0%, #0d101a 100%);
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.3s;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transition: all 0.4s ease;
+  }
+
+  .power-icon {
+    width: 38px;
+    height: 38px;
+    color: #ff5722;
+    transition: all 0.4s ease;
+  }
+
+  /* Orb connected state */
+  .power-orb.connected .power-ring-outer {
+    border-color: rgba(16, 185, 129, 0.5);
+    border-style: solid;
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.35);
   }
 
   .power-orb.connected .power-ring-inner {
     background: var(--emerald-gradient);
-  }
-
-  .power-orb.connecting .power-ring-inner {
-    background: var(--fox-gradient);
-    animation: spin 3s linear infinite;
-  }
-
-  @keyframes spin {
-    100% { transform: rotate(360deg); }
-  }
-
-  .power-icon {
-    width: 36px;
-    height: 36px;
-    color: var(--text-dim);
-    transition: color 0.3s;
+    border-color: rgba(255, 255, 255, 0.3);
   }
 
   .power-orb.connected .power-icon {
     color: #ffffff;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  }
+
+  /* Orb connecting state */
+  .power-orb.connecting .power-ring-outer {
+    border-color: rgba(255, 153, 0, 0.7);
+    animation: rotate-ring 1.8s linear infinite;
   }
 
   .power-orb.connecting .power-icon {
-    color: #ffffff;
+    color: #ff9800;
+  }
+
+  @keyframes rotate-ring {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  /* Orb error state */
+  .power-orb.error .power-ring-outer {
+    border-color: rgba(239, 68, 68, 0.6);
+  }
+
+  .power-orb.error .power-icon {
+    color: #ef4444;
   }
 
   .reactor-status {
-    margin-top: 18px;
+    margin-top: 14px;
+    text-align: center;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -811,98 +885,141 @@
   }
 
   .status-badge {
-    font-size: 13px;
+    font-size: 0.76rem;
     font-weight: 800;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
+    padding: 3px 12px;
+    border-radius: 999px;
   }
 
   .status-badge.connected {
-    color: var(--emerald-active);
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
   }
 
   .status-badge.connecting {
-    color: var(--fox-accent);
+    background: rgba(255, 152, 0, 0.15);
+    color: #ff9800;
+    border: 1px solid rgba(255, 152, 0, 0.3);
   }
 
   .status-badge.disconnected {
-    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
   }
 
   .status-badge.error {
-    color: var(--crimson-err);
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
   }
 
   .duration-counter {
-    font-family: var(--font-mono);
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 1.15rem;
+    font-weight: 700;
     color: var(--text-white);
+    letter-spacing: 0.02em;
   }
 
   .status-hint {
-    font-size: 11px;
+    font-size: 0.74rem;
     color: var(--text-dim);
-    text-align: center;
-    max-width: 260px;
   }
 
   /* Location Card */
-  .location-card {
-    display: flex;
+  .location-section {
     width: 100%;
-    text-align: left;
-    font-family: inherit;
+  }
+
+  .location-card {
+    width: 100%;
+    display: flex;
     align-items: center;
-    padding: 12px 14px;
+    gap: 12px;
+    padding: 10px 14px;
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
-    border-radius: 14px;
+    border-radius: 12px;
     cursor: pointer;
-    transition: all 0.2s;
+    text-align: left;
+    transition: all 0.2s ease;
   }
 
   .location-card:hover {
     background: var(--bg-card-hover);
-    border-color: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.18);
   }
 
   .location-flag {
-    font-size: 24px;
-    margin-right: 12px;
+    font-size: 1.45rem;
+    line-height: 1;
   }
 
   .location-details {
     flex: 1;
+    min-width: 0;
   }
 
   .location-title {
-    font-size: 14px;
+    font-size: 0.88rem;
     font-weight: 700;
     color: var(--text-white);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .location-subtitle {
-    font-size: 11px;
-    color: var(--text-dim);
+    font-size: 0.72rem;
+    color: var(--text-muted);
   }
 
   .location-meta {
     display: flex;
     align-items: center;
     gap: 8px;
-    color: var(--text-dim);
   }
 
   .ping-chip {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 2px 8px;
-    background: rgba(255, 255, 255, 0.05);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 8px;
     border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    transition: all 0.2s ease;
+  }
+
+  .ping-chip:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-white);
   }
 
   .ping-chip.live {
-    color: var(--emerald-active);
+    background: rgba(16, 185, 129, 0.12);
+    color: #10b981;
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+
+  .spinner-inline {
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #ff5722;
+    border-radius: 50%;
+    animation: rotate-ring 0.8s linear infinite;
+  }
+
+  .chevron-icon {
+    color: var(--text-dim);
   }
 
   /* Bento Grid */
@@ -916,7 +1033,7 @@
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     border-radius: 12px;
-    padding: 12px 14px;
+    padding: 10px 12px;
   }
 
   .bento-card.full-span {
@@ -927,42 +1044,37 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
 
   .bento-icon {
-    font-weight: bold;
-    font-size: 12px;
+    font-size: 0.82rem;
+    font-weight: 800;
   }
 
-  .bento-icon.download {
-    color: #38bdf8;
-  }
-
-  .bento-icon.upload {
-    color: #f43f5e;
-  }
+  .bento-icon.download { color: #38bdf8; }
+  .bento-icon.upload { color: #f43f5e; }
 
   .bento-label {
-    font-size: 10px;
+    font-size: 0.65rem;
     font-weight: 700;
-    letter-spacing: 0.05em;
     color: var(--text-dim);
+    letter-spacing: 0.05em;
   }
 
   .bento-value {
-    font-size: 15px;
+    font-size: 1.05rem;
     font-weight: 700;
     color: var(--text-white);
   }
 
   .bento-sub {
-    font-size: 11px;
-    color: var(--text-dim);
+    font-size: 0.68rem;
+    color: var(--text-muted);
     margin-top: 2px;
   }
 
-  /* Quota Bar */
+  /* Quota Card */
   .quota-header {
     display: flex;
     justify-content: space-between;
@@ -974,50 +1086,53 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: 0.74rem;
     font-weight: 600;
+    color: var(--text-muted);
   }
 
   .quota-badge {
-    font-size: 9px;
-    padding: 2px 6px;
-    background: rgba(255, 87, 34, 0.15);
-    color: var(--fox-primary);
-    border-radius: 4px;
+    font-size: 0.65rem;
     font-weight: 800;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255, 87, 34, 0.15);
+    color: #ff5722;
   }
 
   .quota-figures {
-    font-size: 11px;
-    color: var(--text-muted);
+    font-size: 0.72rem;
+    color: var(--text-white);
+    font-weight: 600;
   }
 
   .progress-bar-track {
     width: 100%;
     height: 6px;
-    background: rgba(255, 255, 255, 0.08);
     border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
     overflow: hidden;
   }
 
   .progress-bar-fill {
     height: 100%;
-    background: var(--fox-gradient);
     border-radius: 3px;
-    transition: width 0.3s;
+    background: var(--fox-gradient);
+    transition: width 0.4s ease;
   }
 
   /* Quick Controls */
   .quick-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     margin-top: auto;
+    padding-top: 4px;
   }
 
   .toggle-row {
-    display: flex;
     width: 100%;
-    text-align: left;
-    font-family: inherit;
-    color: inherit;
+    display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 10px 14px;
@@ -1025,340 +1140,69 @@
     border: 1px solid var(--border-subtle);
     border-radius: 12px;
     cursor: pointer;
+    text-align: left;
+    transition: all 0.2s ease;
+  }
+
+  .toggle-row:hover {
+    background: var(--bg-card-hover);
   }
 
   .toggle-name {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-white);
   }
 
   .toggle-desc {
-    font-size: 11px;
-    color: var(--text-dim);
+    font-size: 0.68rem;
+    color: var(--text-muted);
   }
 
   .switch {
-    width: 40px;
+    width: 38px;
     height: 22px;
     border-radius: 11px;
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.12);
     position: relative;
-    transition: background 0.2s;
+    transition: background 0.25s ease;
+    flex-shrink: 0;
   }
 
   .switch.active {
-    background: var(--emerald-active);
+    background: #10b981;
   }
 
   .switch-handle {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     background: #ffffff;
     position: absolute;
-    top: 2px;
-    left: 2px;
-    transition: transform 0.2s;
+    top: 3px;
+    left: 3px;
+    transition: transform 0.25s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   }
 
   .switch.active .switch-handle {
-    transform: translateX(18px);
+    transform: translateX(16px);
   }
 
-  /* Modals */
-  .modal-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(8px);
+  .ports-strip {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: center;
-    z-index: 100;
-  }
-
-  .modal-card {
-    width: 100%;
-    max-height: 85vh;
-    background: #11141f;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 20px 20px 0 0;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  @keyframes slideUp {
-    from { transform: translateY(100%); }
-    to { transform: translateY(0); }
-  }
-
-  .modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .modal-header h3 {
-    font-size: 16px;
-    font-weight: 700;
-  }
-
-  .close-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-dim);
-    font-size: 16px;
-    cursor: pointer;
-    padding: 4px;
-  }
-
-  .search-box input {
-    width: 100%;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--border-subtle);
-    border-radius: 10px;
-    padding: 10px 12px;
-    color: var(--text-white);
-    outline: none;
-  }
-
-  .search-box input:focus {
-    border-color: var(--fox-primary);
-  }
-
-  .country-list {
-    overflow-y: auto;
-    max-height: 50vh;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .country-item {
-    display: flex;
-    width: 100%;
-    text-align: left;
-    font-family: inherit;
-    color: inherit;
-    background: transparent;
-    border: 1px solid transparent;
-    align-items: center;
-    padding: 10px 12px;
-    border-radius: 10px;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .country-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  .country-item.selected {
-    background: rgba(255, 87, 34, 0.12);
-    border: 1px solid var(--border-active);
-  }
-
-  .item-flag {
-    font-size: 20px;
-    margin-right: 12px;
-  }
-
-  .item-info {
-    flex: 1;
-  }
-
-  .item-name {
-    font-size: 13px;
-    font-weight: 600;
-  }
-
-  .item-code {
-    font-size: 11px;
+    gap: 8px;
+    font-size: 0.68rem;
     color: var(--text-dim);
   }
 
-  .selected-indicator {
-    color: var(--fox-primary);
-    font-weight: bold;
-  }
-
-  /* Forms & Buttons */
-  .auth-form {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .auth-intro {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.5;
-  }
-
-  .form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .form-group label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .form-group input {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid var(--border-subtle);
-    border-radius: 10px;
-    padding: 10px 12px;
-    color: #ffffff;
-    font-size: 14px;
-    outline: none;
-  }
-
-  .form-group input:focus {
-    border-color: var(--fox-primary);
-  }
-
-  .primary-btn {
-    background: var(--fox-gradient);
-    color: #ffffff;
-    border: none;
-    border-radius: 10px;
-    padding: 12px;
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: opacity 0.2s;
-  }
-
-  .primary-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .danger-btn {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.4);
-    color: var(--crimson-err);
-    border-radius: 10px;
-    padding: 12px;
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .alert-error {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    color: #fca5a5;
-    font-size: 12px;
-    padding: 10px;
-    border-radius: 8px;
-  }
-
-  .account-active-view {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .account-badge-box {
-    text-align: center;
-    padding: 20px;
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 14px;
-  }
-
-  .account-avatar {
-    font-size: 40px;
-    margin-bottom: 8px;
-  }
-
-  .account-active-title {
-    font-size: 16px;
-    font-weight: 700;
-  }
-
-  .account-active-sub {
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-top: 4px;
-  }
-
-  /* Settings */
-  .settings-content {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .setting-item {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    background: rgba(255, 255, 255, 0.03);
-    padding: 12px;
-    border-radius: 10px;
-  }
-
-  .setting-title {
-    font-size: 13px;
-    font-weight: 700;
-  }
-
-  .setting-desc {
-    font-size: 11px;
-    color: var(--text-dim);
-  }
-
-  .pill-group {
-    display: flex;
-    gap: 6px;
-    margin-top: 6px;
-  }
-
-  .pill-opt {
-    flex: 1;
-    background: rgba(255, 255, 255, 0.05);
+  .port-pill {
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--border-subtle);
     color: var(--text-muted);
-    padding: 6px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .pill-opt.active {
-    background: var(--fox-primary);
-    color: #ffffff;
-    border-color: var(--fox-primary);
-  }
-
-  .port-specs {
-    font-size: 12px;
-    color: var(--text-muted);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 4px;
-  }
-
-  .port-specs span {
-    color: var(--text-white);
-  }
-
-  .font-mono {
-    font-family: var(--font-mono);
   }
 </style>

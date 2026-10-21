@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+
+	"foxyvpn/pkg/dns"
 )
 
 type DialFunc func(address string) (net.Conn, error)
@@ -18,13 +20,15 @@ type TrafficStats struct {
 	BytesDownloaded atomic.Int64
 }
 
-// Socks5Server implements an RFC 1928 SOCKS5 proxy server.
+// Socks5Server implements an RFC 1928 SOCKS5 proxy server with UDP ASSOCIATE support.
 type Socks5Server struct {
-	listener net.Listener
-	dialFunc DialFunc
-	stats    *TrafficStats
-	mu       sync.Mutex
-	running  bool
+	listener  net.Listener
+	dialFunc  DialFunc
+	stats     *TrafficStats
+	dohClient *dns.DohClient
+	dohURL    string
+	mu        sync.Mutex
+	running   bool
 }
 
 // NewSocks5Server creates a SOCKS5 proxy instance.
@@ -33,6 +37,14 @@ func NewSocks5Server(dialFunc DialFunc, stats *TrafficStats) *Socks5Server {
 		dialFunc: dialFunc,
 		stats:    stats,
 	}
+}
+
+// SetDoh configures the DoH client and endpoint URL for handling UDP DNS relay queries.
+func (s *Socks5Server) SetDoh(client *dns.DohClient, url string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dohClient = client
+	s.dohURL = url
 }
 
 // Start begins listening for SOCKS5 connections on the specified local address.
@@ -76,8 +88,36 @@ func (s *Socks5Server) acceptLoop() {
 func (s *Socks5Server) handleClient(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	destAddr, err := s.performHandshake(clientConn)
+	cmd, destAddr, err := s.performHandshake(clientConn)
 	if err != nil {
+		return
+	}
+
+	if cmd == 0x03 { // UDP ASSOCIATE
+		s.mu.Lock()
+		dohClient := s.dohClient
+		dohURL := s.dohURL
+		s.mu.Unlock()
+
+		relay, err := NewUdpDnsRelay(clientConn, dohClient, dohURL)
+		if err != nil {
+			_, _ = clientConn.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+			return
+		}
+		defer relay.Close()
+
+		// Send success reply with bound UDP port on 127.0.0.1
+		portBytes := make([]byte, 2)
+		binary.BigEndian.PutUint16(portBytes, uint16(relay.BoundPort()))
+		reply := []byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, portBytes[0], portBytes[1]}
+		if _, err := clientConn.Write(reply); err != nil {
+			return
+		}
+
+		relay.Start()
+		// Block until control TCP connection terminates
+		buf := make([]byte, 1)
+		_, _ = clientConn.Read(buf)
 		return
 	}
 
@@ -97,86 +137,87 @@ func (s *Socks5Server) handleClient(clientConn net.Conn) {
 	relayTraffic(clientConn, upstreamConn, s.stats)
 }
 
-func (s *Socks5Server) performHandshake(conn net.Conn) (string, error) {
+func (s *Socks5Server) performHandshake(conn net.Conn) (byte, string, error) {
 	// Negotiation phase
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
-		return "", err
+		return 0, "", err
 	}
 
 	if header[0] != 0x05 {
-		return "", fmt.Errorf("unsupported socks version: %d", header[0])
+		return 0, "", fmt.Errorf("unsupported socks version: %d", header[0])
 	}
 
 	numMethods := int(header[1])
 	methods := make([]byte, numMethods)
 	if _, err := io.ReadFull(conn, methods); err != nil {
-		return "", err
+		return 0, "", err
 	}
 
 	// NO AUTHENTICATION REQUIRED (0x00)
 	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
-		return "", err
+		return 0, "", err
 	}
 
 	// Request phase
 	reqHeader := make([]byte, 4)
 	if _, err := io.ReadFull(conn, reqHeader); err != nil {
-		return "", err
+		return 0, "", err
 	}
 
 	if reqHeader[0] != 0x05 {
-		return "", fmt.Errorf("invalid socks request version: %d", reqHeader[0])
+		return 0, "", fmt.Errorf("invalid socks request version: %d", reqHeader[0])
 	}
 
 	cmd := reqHeader[1]
-	if cmd != 0x01 { // CONNECT
+	if cmd != 0x01 && cmd != 0x03 { // CONNECT or UDP ASSOCIATE
 		_, _ = conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Command not supported
-		return "", fmt.Errorf("unsupported command: %d", cmd)
+		return 0, "", fmt.Errorf("unsupported command: %d", cmd)
 	}
 
 	atyp := reqHeader[3]
 	var host string
 
+
 	switch atyp {
 	case 0x01: // IPv4
 		ipv4 := make([]byte, 4)
 		if _, err := io.ReadFull(conn, ipv4); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = net.IP(ipv4).String()
 
 	case 0x03: // Domain name
 		lenBuf := make([]byte, 1)
 		if _, err := io.ReadFull(conn, lenBuf); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		domainLen := int(lenBuf[0])
 		domainBuf := make([]byte, domainLen)
 		if _, err := io.ReadFull(conn, domainBuf); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = string(domainBuf)
 
 	case 0x04: // IPv6
 		ipv6 := make([]byte, 16)
 		if _, err := io.ReadFull(conn, ipv6); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = net.IP(ipv6).String()
 
 	default:
 		_, _ = conn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Address type not supported
-		return "", errors.New("unsupported address type")
+		return 0, "", errors.New("unsupported address type")
 	}
 
 	portBuf := make([]byte, 2)
 	if _, err := io.ReadFull(conn, portBuf); err != nil {
-		return "", err
+		return 0, "", err
 	}
 	port := binary.BigEndian.Uint16(portBuf)
 
-	return net.JoinHostPort(host, strconv.Itoa(int(port))), nil
+	return cmd, net.JoinHostPort(host, strconv.Itoa(int(port))), nil
 }
 
 // Stop shuts down the SOCKS5 proxy listener.

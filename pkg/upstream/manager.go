@@ -15,6 +15,7 @@ type TokenProvider func() (string, error)
 // UpstreamManager manages the lifecycle, pooling, and health of upstream HTTP/2 sessions.
 type UpstreamManager struct {
 	mu            sync.RWMutex
+	currentConfig UpstreamDialConfig
 	currentHost   string
 	currentPort   int
 	splitMode     TlsSplitMode
@@ -36,10 +37,11 @@ func (m *UpstreamManager) SetSplitMode(mode TlsSplitMode) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.splitMode = mode
+	m.currentConfig.SplitMode = mode
 }
 
-// Connect selects an upstream edge server and establishes the multiplexed H2 tunnel.
-func (m *UpstreamManager) Connect(host string, port int) error {
+// ConnectWithConfig establishes the multiplexed H2 tunnel using specified dial configuration.
+func (m *UpstreamManager) ConnectWithConfig(cfg UpstreamDialConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -49,17 +51,32 @@ func (m *UpstreamManager) Connect(host string, port int) error {
 	}
 
 	start := time.Now()
-	sess, err := DialH2Session(host, port, m.splitMode)
+	sess, err := DialH2SessionWithConfig(cfg)
 	if err != nil {
-		return fmt.Errorf("failed connecting to upstream proxy %s:%d: %w", host, port, err)
+		return fmt.Errorf("failed connecting to upstream proxy %s:%d: %w", cfg.Host, cfg.Port, err)
 	}
 
-	m.currentHost = host
-	m.currentPort = port
+	m.currentConfig = cfg
+	m.currentHost = cfg.Host
+	m.currentPort = cfg.Port
 	m.session = sess
 	m.lastPingMs = time.Since(start).Milliseconds()
 
 	return nil
+}
+
+// Connect selects an upstream edge server and establishes the multiplexed H2 tunnel.
+func (m *UpstreamManager) Connect(host string, port int) error {
+	m.mu.RLock()
+	cfg := m.currentConfig
+	split := m.splitMode
+	m.mu.RUnlock()
+
+	cfg.Host = host
+	cfg.Port = port
+	cfg.SplitMode = split
+
+	return m.ConnectWithConfig(cfg)
 }
 
 // Dial connects to a remote target through the active upstream HTTP/2 CONNECT tunnel.
@@ -81,16 +98,15 @@ func (m *UpstreamManager) Dial(targetAddress string) (net.Conn, error) {
 
 	m.mu.RLock()
 	sess := m.session
-	currentHost := m.currentHost
-	currentPort := m.currentPort
+	cfg := m.currentConfig
 	m.mu.RUnlock()
 
 	if sess == nil || !sess.IsAlive() {
 		// Attempt reconnect
-		if currentHost == "" {
+		if cfg.Host == "" {
 			return nil, errors.New("no upstream proxy node configured")
 		}
-		if err := m.Connect(currentHost, currentPort); err != nil {
+		if err := m.ConnectWithConfig(cfg); err != nil {
 			return nil, fmt.Errorf("failed to reconnect upstream: %w", err)
 		}
 		m.mu.RLock()
@@ -101,8 +117,8 @@ func (m *UpstreamManager) Dial(targetAddress string) (net.Conn, error) {
 	conn, err := sess.OpenTunnel(host, port, token)
 	if err != nil {
 		// If session died during dial, try one reconnect
-		if !sess.IsAlive() && currentHost != "" {
-			_ = m.Connect(currentHost, currentPort)
+		if !sess.IsAlive() && cfg.Host != "" {
+			_ = m.ConnectWithConfig(cfg)
 			m.mu.RLock()
 			sess = m.session
 			m.mu.RUnlock()

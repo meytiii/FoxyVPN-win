@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"foxyvpn/pkg/trust"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
@@ -47,34 +48,33 @@ type H2Session struct {
 	cancel   context.CancelFunc
 }
 
-// DialH2Session establishes an HTTP/2 TLS tunnel connection to a proxy node.
-func DialH2Session(host string, port int, splitMode TlsSplitMode) (*H2Session, error) {
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	dialer := &net.Dialer{
-		Timeout: 15 * time.Second,
-	}
+// DialH2SessionWithConfig establishes an HTTP/2 TLS tunnel connection to a proxy node with full options.
+func DialH2SessionWithConfig(cfg UpstreamDialConfig) (*H2Session, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 
-	tcpConn, err := dialer.Dial("tcp", addr)
+	tcpConn, err := DialBaseConnection(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial TCP %s: %w", addr, err)
+		return nil, fmt.Errorf("failed connecting to upstream transport: %w", err)
 	}
 
 	var baseConn net.Conn = tcpConn
-	if splitMode != SplitOff {
-		baseConn = NewSplitConn(tcpConn, splitMode)
+	if cfg.SplitMode != SplitOff {
+		baseConn = NewSplitConn(tcpConn, cfg.SplitMode)
 	}
 
 	tlsConfig := &tls.Config{
-		ServerName:         host,
+		ServerName:         cfg.Host,
 		NextProtos:         []string{"h2"},
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: false,
+		RootCAs:            trust.GetUpstreamCertPool(),
 	}
 
 	tlsConn := tls.Client(baseConn, tlsConfig)
 	if err := tlsConn.Handshake(); err != nil {
 		_ = tcpConn.Close()
-		return nil, fmt.Errorf("TLS handshake failed for %s: %w", host, err)
+		return nil, fmt.Errorf("TLS handshake failed for %s: %w", cfg.Host, err)
 	}
 
 	negotiatedProto := tlsConn.ConnectionState().NegotiatedProtocol
@@ -105,18 +105,18 @@ func DialH2Session(host string, port int, splitMode TlsSplitMode) (*H2Session, e
 	// Send initial connection-level WINDOW_UPDATE
 	_ = framer.WriteWindowUpdate(0, 1048576)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	sessCtx, sessCancel := context.WithCancel(context.Background())
 	sess := &H2Session{
-		remoteHost:   host,
-		remotePort:   port,
-		splitMode:    splitMode,
+		remoteHost:   cfg.Host,
+		remotePort:   cfg.Port,
+		splitMode:    cfg.SplitMode,
 		rawConn:      tcpConn,
 		tlsConn:      tlsConn,
 		framer:       framer,
 		streams:      make(map[uint32]*tunneledConn),
 		nextStreamID: 1,
-		ctx:          ctx,
-		cancel:       cancel,
+		ctx:          sessCtx,
+		cancel:       sessCancel,
 	}
 	sess.encoder = hpack.NewEncoder(&sess.headerBuf)
 
@@ -124,6 +124,15 @@ func DialH2Session(host string, port int, splitMode TlsSplitMode) (*H2Session, e
 	go sess.pingLoop()
 
 	return sess, nil
+}
+
+// DialH2Session establishes an HTTP/2 TLS tunnel connection to a proxy node.
+func DialH2Session(host string, port int, splitMode TlsSplitMode) (*H2Session, error) {
+	return DialH2SessionWithConfig(UpstreamDialConfig{
+		Host:      host,
+		Port:      port,
+		SplitMode: splitMode,
+	})
 }
 
 // OpenTunnel initiates an HTTP/2 CONNECT tunnel to targetHost:targetPort.

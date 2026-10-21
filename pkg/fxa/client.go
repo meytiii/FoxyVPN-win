@@ -49,10 +49,21 @@ func (e *FxaError) Error() string {
 
 // RuntimeAuth represents persisted authentication tokens.
 type RuntimeAuth struct {
+	Email                 string `json:"email,omitempty"`
 	AccessToken           string `json:"access_token"`
 	RefreshToken          string `json:"refresh_token,omitempty"`
 	ExpiresAtEpochSeconds int64  `json:"expires_at_epoch_seconds"`
 	PendingSessionToken   string `json:"pending_session_token,omitempty"`
+}
+
+// GetSavedEmail returns the logged-in user email.
+func (c *FxaClient) GetSavedEmail() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.auth != nil {
+		return c.auth.Email
+	}
+	return ""
 }
 
 // FxaClient manages authentication, session tokens, and 2FA with Firefox Accounts.
@@ -158,11 +169,19 @@ func (c *FxaClient) StartLogin(email, password string) (bool, error) {
 		if c.auth == nil {
 			c.auth = &RuntimeAuth{}
 		}
+		c.auth.Email = cleanEmail
 		c.auth.PendingSessionToken = sessionToken
 		c.mu.Unlock()
 		_ = c.saveAuth(c.auth)
 		return true, nil
 	}
+
+	c.mu.Lock()
+	if c.auth == nil {
+		c.auth = &RuntimeAuth{}
+	}
+	c.auth.Email = cleanEmail
+	c.mu.Unlock()
 
 	if err := c.completeLogin(sessionToken); err != nil {
 		return false, err

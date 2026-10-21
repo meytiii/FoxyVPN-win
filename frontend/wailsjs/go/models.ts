@@ -14,11 +14,34 @@ export namespace core {
 	    quota_limit_bytes: number;
 	    quota_remaining_bytes: number;
 	    quota_reset_epoch: number;
+	    is_unlimited: boolean;
 	    is_signed_in: boolean;
+	    user_email: string;
 	    tls_split_mode: number;
 	    system_proxy_enabled: boolean;
 	    socks_port: number;
 	    http_port: number;
+	    socks_bind_address: string;
+	    real_ip: string;
+	    real_country: string;
+	    exit_ip: string;
+	    exit_country: string;
+	    is_protected: boolean;
+	    exit_check_enabled: boolean;
+	    dns_provider: string;
+	    custom_doh_url: string;
+	    bootstrap_dns: string;
+	    custom_bootstrap_ip: string;
+	    custom_edge_address: string;
+	    upstream_proxy_enabled: boolean;
+	    upstream_proxy_type: string;
+	    upstream_proxy_host: string;
+	    upstream_proxy_port: number;
+	    minimize_to_tray: boolean;
+	    close_to_tray: boolean;
+	    launch_on_startup: boolean;
+	    bypass_lan: boolean;
+	    custom_bypass_list: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new VpnStatus(source);
@@ -39,11 +62,82 @@ export namespace core {
 	        this.quota_limit_bytes = source["quota_limit_bytes"];
 	        this.quota_remaining_bytes = source["quota_remaining_bytes"];
 	        this.quota_reset_epoch = source["quota_reset_epoch"];
+	        this.is_unlimited = source["is_unlimited"];
 	        this.is_signed_in = source["is_signed_in"];
+	        this.user_email = source["user_email"];
 	        this.tls_split_mode = source["tls_split_mode"];
 	        this.system_proxy_enabled = source["system_proxy_enabled"];
 	        this.socks_port = source["socks_port"];
 	        this.http_port = source["http_port"];
+	        this.socks_bind_address = source["socks_bind_address"];
+	        this.real_ip = source["real_ip"];
+	        this.real_country = source["real_country"];
+	        this.exit_ip = source["exit_ip"];
+	        this.exit_country = source["exit_country"];
+	        this.is_protected = source["is_protected"];
+	        this.exit_check_enabled = source["exit_check_enabled"];
+	        this.dns_provider = source["dns_provider"];
+	        this.custom_doh_url = source["custom_doh_url"];
+	        this.bootstrap_dns = source["bootstrap_dns"];
+	        this.custom_bootstrap_ip = source["custom_bootstrap_ip"];
+	        this.custom_edge_address = source["custom_edge_address"];
+	        this.upstream_proxy_enabled = source["upstream_proxy_enabled"];
+	        this.upstream_proxy_type = source["upstream_proxy_type"];
+	        this.upstream_proxy_host = source["upstream_proxy_host"];
+	        this.upstream_proxy_port = source["upstream_proxy_port"];
+	        this.minimize_to_tray = source["minimize_to_tray"];
+	        this.close_to_tray = source["close_to_tray"];
+	        this.launch_on_startup = source["launch_on_startup"];
+	        this.bypass_lan = source["bypass_lan"];
+	        this.custom_bypass_list = source["custom_bypass_list"];
+	    }
+	}
+
+}
+
+export namespace exitcheck {
+	
+	export class IpLocationInfo {
+	    ip: string;
+	    country_code: string;
+	    is_protected: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new IpLocationInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ip = source["ip"];
+	        this.country_code = source["country_code"];
+	        this.is_protected = source["is_protected"];
+	    }
+	}
+
+}
+
+export namespace logger {
+	
+	export class LogEntry {
+	    id: number;
+	    timestamp_ms: number;
+	    time_str: string;
+	    level: string;
+	    tag: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LogEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.timestamp_ms = source["timestamp_ms"];
+	        this.time_str = source["time_str"];
+	        this.level = source["level"];
+	        this.tag = source["tag"];
+	        this.message = source["message"];
 	    }
 	}
 
@@ -176,6 +270,67 @@ export namespace remotesettings {
 		}
 	}
 	
+
+}
+
+export namespace settings {
+	
+	export class AppSettings {
+	    exit_check_enabled: boolean;
+	    dns_provider: string;
+	    custom_doh_url: string;
+	    bootstrap_dns_provider: string;
+	    custom_bootstrap_ip: string;
+	    socks_port: number;
+	    socks_bind_address: string;
+	    http_proxy_enabled: boolean;
+	    http_proxy_port: number;
+	    proxy_only_mode: boolean;
+	    custom_edge_address: string;
+	    tls_split_mode: number;
+	    upstream_proxy_enabled: boolean;
+	    upstream_proxy_type: string;
+	    upstream_proxy_host: string;
+	    upstream_proxy_port: number;
+	    upstream_proxy_username: string;
+	    upstream_proxy_password: string;
+	    minimize_to_tray: boolean;
+	    close_to_tray: boolean;
+	    launch_on_startup: boolean;
+	    bypass_lan: boolean;
+	    custom_bypass_list: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exit_check_enabled = source["exit_check_enabled"];
+	        this.dns_provider = source["dns_provider"];
+	        this.custom_doh_url = source["custom_doh_url"];
+	        this.bootstrap_dns_provider = source["bootstrap_dns_provider"];
+	        this.custom_bootstrap_ip = source["custom_bootstrap_ip"];
+	        this.socks_port = source["socks_port"];
+	        this.socks_bind_address = source["socks_bind_address"];
+	        this.http_proxy_enabled = source["http_proxy_enabled"];
+	        this.http_proxy_port = source["http_proxy_port"];
+	        this.proxy_only_mode = source["proxy_only_mode"];
+	        this.custom_edge_address = source["custom_edge_address"];
+	        this.tls_split_mode = source["tls_split_mode"];
+	        this.upstream_proxy_enabled = source["upstream_proxy_enabled"];
+	        this.upstream_proxy_type = source["upstream_proxy_type"];
+	        this.upstream_proxy_host = source["upstream_proxy_host"];
+	        this.upstream_proxy_port = source["upstream_proxy_port"];
+	        this.upstream_proxy_username = source["upstream_proxy_username"];
+	        this.upstream_proxy_password = source["upstream_proxy_password"];
+	        this.minimize_to_tray = source["minimize_to_tray"];
+	        this.close_to_tray = source["close_to_tray"];
+	        this.launch_on_startup = source["launch_on_startup"];
+	        this.bypass_lan = source["bypass_lan"];
+	        this.custom_bypass_list = source["custom_bypass_list"];
+	    }
+	}
 
 }
 

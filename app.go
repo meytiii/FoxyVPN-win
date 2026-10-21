@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"foxyvpn/pkg/core"
+	"foxyvpn/pkg/exitcheck"
+	"foxyvpn/pkg/logger"
 	"foxyvpn/pkg/remotesettings"
+	"foxyvpn/pkg/settings"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -33,6 +37,11 @@ func (a *App) startup(ctx context.Context) {
 		a.service.RegisterListener(func(status core.VpnStatus) {
 			if a.ctx != nil {
 				runtime.EventsEmit(a.ctx, "vpn:status", status)
+			}
+		})
+		logger.GetLogger().RegisterListener(func(entry logger.LogEntry) {
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, "vpn:log", entry)
 			}
 		})
 		go func() {
@@ -93,6 +102,58 @@ func (a *App) SetSystemProxyEnabled(enable bool) {
 	}
 }
 
+// GetSettings retrieves current application preferences.
+func (a *App) GetSettings() settings.AppSettings {
+	if a.service == nil {
+		return settings.DefaultSettings()
+	}
+	return a.service.GetSettings()
+}
+
+// UpdateSettings persists updated application preferences.
+func (a *App) UpdateSettings(cfg settings.AppSettings) error {
+	if a.service == nil {
+		return fmt.Errorf("service uninitialized")
+	}
+	return a.service.UpdateSettings(cfg)
+}
+
+// PingServer measures latency to a specific edge node.
+func (a *App) PingServer(host string, port int) int64 {
+	if a.service == nil {
+		return -1
+	}
+	return a.service.PingServer(host, port)
+}
+
+// PingAllServers measures latency to all available locations in parallel.
+func (a *App) PingAllServers() (map[string]int64, error) {
+	if a.service == nil {
+		return nil, fmt.Errorf("service uninitialized")
+	}
+	return a.service.PingAllServers()
+}
+
+// GetLogs returns buffered log entries filtered by level (ALL, INFO, PROBLEMS).
+func (a *App) GetLogs(filter string) []logger.LogEntry {
+	return logger.GetLogger().GetEntries(filter)
+}
+
+// ClearLogs clears the in-memory log buffer.
+func (a *App) ClearLogs() {
+	logger.GetLogger().Clear()
+}
+
+// ExportLogs writes log buffer to a text file and returns path.
+func (a *App) ExportLogs() (string, error) {
+	return logger.GetLogger().SaveToFile("")
+}
+
+// ExportLogsText returns formatted logs as string for clipboard copy.
+func (a *App) ExportLogsText() string {
+	return logger.GetLogger().ExportAsText()
+}
+
 // FxaLogin starts authentication with Firefox Accounts.
 func (a *App) FxaLogin(email, password string) (bool, error) {
 	if a.service == nil {
@@ -123,4 +184,20 @@ func (a *App) GetCountries() ([]remotesettings.VpnCountry, error) {
 		return nil, fmt.Errorf("service uninitialized")
 	}
 	return a.service.GetCountries()
+}
+
+// CheckDirectIp returns public IP information directly.
+func (a *App) CheckDirectIp() (*exitcheck.IpLocationInfo, error) {
+	checker := exitcheck.NewExitChecker()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	return checker.FetchDirectIpInfo(ctx)
+}
+
+// CheckProxiedIp returns public IP information through the local SOCKS5 proxy.
+func (a *App) CheckProxiedIp(socksPort int) (*exitcheck.IpLocationInfo, error) {
+	checker := exitcheck.NewExitChecker()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return checker.FetchProxiedIpInfo(ctx, socksPort)
 }

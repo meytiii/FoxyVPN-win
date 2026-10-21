@@ -9,9 +9,10 @@
     SetSystemProxyEnabled,
     PingAllServers
   } from '../wailsjs/go/main/App.js';
-  import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime.js';
+  import { EventsOn, EventsOff, BrowserOpenURL } from '../wailsjs/runtime/runtime.js';
   import type { core, remotesettings } from '../wailsjs/go/models';
   import foxyLogo from './assets/images/foxy-logo.png';
+  import { getCountryFlagUrl } from './utils/flags';
 
   import LocationDrawer from './components/LocationDrawer.svelte';
   import SettingsModal from './components/SettingsModal.svelte';
@@ -202,6 +203,14 @@
     }
   }
 
+  function handleOpenGithub() {
+    try {
+      BrowserOpenURL('https://github.com/meytiii/FoxyVPN-win');
+    } catch (e) {
+      console.error('Failed to open GitHub repo:', e);
+    }
+  }
+
   async function toggleSystemProxy() {
     const nextVal = !status.system_proxy_enabled;
     try {
@@ -298,6 +307,20 @@
     </div>
 
     <div class="header-actions">
+      <!-- Star on GitHub Button -->
+      <button 
+        type="button" 
+        class="github-star-btn" 
+        on:click={handleOpenGithub} 
+        title="Star FoxyVPN on GitHub"
+        aria-label="Star FoxyVPN on GitHub"
+      >
+        <svg class="gh-icon" viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        <span class="star-badge">★ Star</span>
+      </button>
+
       <!-- Logs Terminal Modal Trigger -->
       <button 
         type="button" 
@@ -439,7 +462,20 @@
         {#if !status.selected_country || status.selected_country === 'REC'}
           <span class="flag-globe">🌐</span>
         {:else}
-          <span class="flag-pill">{status.selected_country}</span>
+          <div class="flag-container-hero">
+            <img 
+              class="country-flag-img-hero" 
+              src={getCountryFlagUrl(status.selected_country)} 
+              alt="{status.selected_country} flag"
+              on:error={(e) => {
+                const target = e.currentTarget;
+                if (target instanceof HTMLElement) target.style.display = 'none';
+                const fallback = target.nextElementSibling;
+                if (fallback instanceof HTMLElement) fallback.style.display = 'inline-flex';
+              }}
+            />
+            <span class="flag-pill flag-fallback" style="display: none;">{status.selected_country}</span>
+          </div>
         {/if}
       </div>
       <div class="location-details">
@@ -531,7 +567,10 @@
     </button>
 
     <div class="ports-strip">
-      <span class="port-label">Proxy Ports:</span>
+      <button type="button" class="github-star-pill font-mono" on:click={handleOpenGithub} title="Star FoxyVPN on GitHub">
+        ★ Star on GitHub
+      </button>
+      <span class="port-label">Proxy:</span>
       <span class="port-pill font-mono">SOCKS5 :{status.socks_port}</span>
       <span class="port-pill font-mono">HTTP :{status.http_port}</span>
     </div>
@@ -659,6 +698,38 @@
     background: var(--bg-card-hover);
     color: var(--text-white);
     border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .github-star-btn {
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-white);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 700;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .github-star-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 193, 7, 0.5);
+    color: #ffd166;
+    box-shadow: 0 2px 8px rgba(255, 193, 7, 0.2);
+  }
+
+  .gh-icon {
+    flex-shrink: 0;
+  }
+
+  .star-badge {
+    color: #ffd166;
+    letter-spacing: 0.02em;
   }
 
   .icon-pill {
@@ -1232,6 +1303,43 @@
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--border-subtle);
     color: var(--text-muted);
+  }
+
+  .github-star-pill {
+    background: rgba(255, 193, 7, 0.1);
+    border: 1px solid rgba(255, 193, 7, 0.25);
+    color: #ffd166;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .github-star-pill:hover {
+    background: rgba(255, 193, 7, 0.2);
+    border-color: rgba(255, 193, 7, 0.45);
+    color: #ffffff;
+  }
+
+  .flag-container-hero {
+    width: 32px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .country-flag-img-hero {
+    width: 30px;
+    height: 21px;
+    object-fit: cover;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+    background: #141724;
+    flex-shrink: 0;
   }
 
   .flag-globe {

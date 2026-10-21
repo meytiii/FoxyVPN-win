@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { SetSelectedCountry, PingAllServers, GetCountries } from '../../wailsjs/go/main/App.js';
   import type { remotesettings } from '../../wailsjs/go/models';
+  import { getCountryFlagUrl } from '../utils/flags';
 
   export let show = false;
   export let countries: remotesettings.VpnCountry[] = [];
@@ -261,7 +262,21 @@
                 {#if country.code === 'REC'}
                   <span class="flag-pill rec">⚡ AUTO</span>
                 {:else}
-                  <span class="flag-pill">{country.code}</span>
+                  <div class="flag-container">
+                    <img 
+                      class="country-flag-img" 
+                      src={getCountryFlagUrl(country.code)} 
+                      alt="{country.name} flag"
+                      loading="lazy"
+                      on:error={(e) => {
+                        const target = e.currentTarget;
+                        if (target instanceof HTMLElement) target.style.display = 'none';
+                        const fallback = target.nextElementSibling;
+                        if (fallback instanceof HTMLElement) fallback.style.display = 'inline-flex';
+                      }}
+                    />
+                    <span class="flag-pill flag-fallback" style="display: none;">{country.code}</span>
+                  </div>
                 {/if}
                 <div class="name-box">
                   <span class="country-name">{country.name}</span>
@@ -528,6 +543,23 @@
     align-items: center;
     gap: 12px;
   }
+  .flag-container {
+    width: 32px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .country-flag-img {
+    width: 30px;
+    height: 21px;
+    object-fit: cover;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+    background: #141724;
+    flex-shrink: 0;
+  }
   .flag-pill {
     display: inline-flex;
     align-items: center;
@@ -544,6 +576,10 @@
     color: #e2e8f0;
     letter-spacing: 0.04em;
     flex-shrink: 0;
+  }
+  .flag-pill.flag-fallback {
+    font-size: 0.68rem;
+    padding: 0 4px;
   }
   .flag-pill.rec {
     background: rgba(255, 87, 34, 0.15);

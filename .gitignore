@@ -8,3 +8,6 @@ frontend/node_modules/
 node_modules/
 *.exe
 changes.md
+graphify-out/
+GEMINI.md
+.gemini/

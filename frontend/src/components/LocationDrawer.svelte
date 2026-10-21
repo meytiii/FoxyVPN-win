@@ -364,6 +364,7 @@
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
   }
   .header-left h3 {
     font-size: 1.05rem;
@@ -422,6 +423,7 @@
     display: flex;
     gap: 8px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    flex-shrink: 0;
   }
   .search-input-wrapper {
     flex: 1;
@@ -491,6 +493,7 @@
   }
   .country-group {
     flex-shrink: 0;
+    min-height: 52px;
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 12px;
@@ -511,12 +514,14 @@
   }
   .country-row {
     min-height: 52px;
+    width: 100%;
     padding: 12px 14px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     cursor: pointer;
     flex-shrink: 0;
+    box-sizing: border-box;
   }
   .country-info {
     display: flex;

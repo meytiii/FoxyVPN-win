@@ -115,11 +115,9 @@
     errorMessage = '';
     try {
       let defaults: settings.AppSettings;
-      if (typeof ResetSettings === 'function') {
+      try {
         defaults = await ResetSettings();
-      } else if (window['go']?.['main']?.['App']?.['ResetSettings']) {
-        defaults = await window['go']['main']['App']['ResetSettings']();
-      } else {
+      } catch (err) {
         defaults = {
           exit_check_enabled: true,
           dns_provider: 'SYSTEM_DEFAULT',

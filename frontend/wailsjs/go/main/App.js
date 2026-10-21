@@ -58,6 +58,14 @@ export function GetStatus() {
   return window['go']['main']['App']['GetStatus']();
 }
 
+export function IsElevated() {
+  return window['go']['main']['App']['IsElevated']();
+}
+
+export function IsQuitting() {
+  return window['go']['main']['App']['IsQuitting']();
+}
+
 export function NotifyMinimizedToTray() {
   return window['go']['main']['App']['NotifyMinimizedToTray']();
 }
@@ -76,6 +84,10 @@ export function QuitApplication() {
 
 export function ResetSettings() {
   return window['go']['main']['App']['ResetSettings']();
+}
+
+export function SetRoutingMode(arg1) {
+  return window['go']['main']['App']['SetRoutingMode'](arg1);
 }
 
 export function SetSelectedCountry(arg1, arg2) {

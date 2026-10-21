@@ -9,7 +9,8 @@
     SetSystemProxyEnabled,
     PingAllServers,
     GetSettings,
-    UpdateSettings
+    UpdateSettings,
+    SetRoutingMode
   } from '../wailsjs/go/main/App.js';
   import { EventsOn, EventsOff, BrowserOpenURL } from '../wailsjs/runtime/runtime.js';
   import type { core, remotesettings } from '../wailsjs/go/models';
@@ -220,12 +221,10 @@
     try {
       const s = await GetSettings();
       if (s) {
-        if (s.proxy_only_mode) {
+        if (s.routing_mode === 'tunnel') {
+          currentMode = 'tunnel';
+        } else if (s.routing_mode === 'proxy' || s.proxy_only_mode) {
           currentMode = 'proxy';
-        } else if (currentMode === 'tunnel') {
-          // Keep user choice
-        } else if (status.system_proxy_enabled) {
-          currentMode = 'system';
         } else {
           currentMode = 'system';
         }
@@ -238,29 +237,12 @@
   async function handleSelectMode(mode: RoutingMode) {
     currentMode = mode;
     try {
+      await SetRoutingMode(mode);
       const s = await GetSettings();
-      if (mode === 'system') {
-        if (s) {
-          s.proxy_only_mode = false;
-          await UpdateSettings(s);
-        }
-        await SetSystemProxyEnabled(true);
-        status.system_proxy_enabled = true;
-      } else if (mode === 'proxy') {
-        if (s) {
-          s.proxy_only_mode = true;
-          await UpdateSettings(s);
-        }
-        await SetSystemProxyEnabled(false);
-        status.system_proxy_enabled = false;
-      } else if (mode === 'tunnel') {
-        // Tunnel mode (Wintun) under development: enable System Proxy as fallback
-        if (s) {
-          s.proxy_only_mode = false;
-          await UpdateSettings(s);
-        }
-        await SetSystemProxyEnabled(true);
-        status.system_proxy_enabled = true;
+      if (s) {
+        s.routing_mode = mode;
+        s.proxy_only_mode = (mode === 'proxy');
+        await UpdateSettings(s);
       }
       await refreshStatus();
     } catch (e) {
@@ -593,14 +575,13 @@
         role="radio"
         aria-checked={currentMode === 'tunnel'}
         on:click={() => handleSelectMode('tunnel')}
-        title="Tunnel Mode: Route all device IP traffic via virtual TUN interface (In Development)"
+        title="Tunnel Mode: Route all device IP traffic via virtual Wintun network adapter"
       >
         <span class="mode-indicator" class:indicator-on={currentMode === 'tunnel'}></span>
         <svg class="mode-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
         <span class="mode-label">Tunnel Mode</span>
-        <span class="mode-badge-soon">SOON</span>
       </button>
     </div>
 
@@ -614,7 +595,7 @@
         <span class="mode-status-desc"><strong>Proxy Mode:</strong> SOCKS5 (:1080) & HTTP (:8080) on localhost (system untouched)</span>
       {:else if currentMode === 'tunnel'}
         <span class="mode-status-dot purple"></span>
-        <span class="mode-status-desc"><strong>Tunnel Mode (Wintun):</strong> TUN driver in progress • Protected via System Proxy</span>
+        <span class="mode-status-desc"><strong>Tunnel Mode (Wintun):</strong> All device traffic routed via virtual network adapter</span>
       {/if}
     </div>
   </section>
@@ -1382,17 +1363,6 @@
     letter-spacing: 0.01em;
   }
 
-  .mode-badge-soon {
-    font-size: 0.54rem;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-    padding: 1px 4px;
-    border-radius: 4px;
-    background: rgba(168, 85, 247, 0.25);
-    border: 1px solid rgba(168, 85, 247, 0.4);
-    color: #e9d5ff;
-    line-height: 1.1;
-  }
 
   .mode-status-line {
     display: flex;

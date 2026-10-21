@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"sync/atomic"
 	"time"
 
 	"foxyvpn/pkg/core"
@@ -10,6 +12,7 @@ import (
 	"foxyvpn/pkg/logger"
 	"foxyvpn/pkg/remotesettings"
 	"foxyvpn/pkg/settings"
+	"foxyvpn/pkg/tun"
 	"foxyvpn/pkg/winutil"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -20,6 +23,11 @@ type App struct {
 	service          *core.VpnService
 	tray             *winutil.TrayManager
 	notifiedTrayOnce bool
+	isQuitting       atomic.Bool
+}
+
+func (a *App) IsQuitting() bool {
+	return a.isQuitting.Load()
 }
 
 // NewApp creates a new App application instance.
@@ -79,15 +87,20 @@ func (a *App) startup(ctx context.Context) {
 			}
 		},
 		func() {
+			a.isQuitting.Store(true)
+			if a.service != nil {
+				_ = a.service.Disconnect()
+			}
+			if a.tray != nil {
+				a.tray.Close()
+			}
 			if a.ctx != nil {
-				if a.service != nil {
-					_ = a.service.Disconnect()
-				}
-				if a.tray != nil {
-					a.tray.Close()
-				}
 				runtime.Quit(a.ctx)
 			}
+			go func() {
+				time.Sleep(300 * time.Millisecond)
+				os.Exit(0)
+			}()
 		},
 	)
 	if err == nil {
@@ -270,6 +283,7 @@ func (a *App) CheckProxiedIp(socksPort int) (*exitcheck.IpLocationInfo, error) {
 
 // QuitApplication cleanly shuts down the application and releases all resources.
 func (a *App) QuitApplication() {
+	a.isQuitting.Store(true)
 	if a.service != nil {
 		_ = a.service.Disconnect()
 	}
@@ -279,4 +293,21 @@ func (a *App) QuitApplication() {
 	if a.ctx != nil {
 		runtime.Quit(a.ctx)
 	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		os.Exit(0)
+	}()
 }
+
+// SetRoutingMode updates active traffic routing mode: "system", "proxy", or "tunnel".
+func (a *App) SetRoutingMode(mode string) {
+	if a.service != nil {
+		a.service.SetRoutingMode(mode)
+	}
+}
+
+// IsElevated returns true if process is running with Windows Administrator privileges.
+func (a *App) IsElevated() bool {
+	return tun.IsElevated()
+}
+

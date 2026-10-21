@@ -20,6 +20,7 @@ import (
 	"foxyvpn/pkg/proxy"
 	"foxyvpn/pkg/remotesettings"
 	"foxyvpn/pkg/settings"
+	"foxyvpn/pkg/tun"
 	"foxyvpn/pkg/upstream"
 	"foxyvpn/pkg/winproxy"
 	"foxyvpn/pkg/winutil"
@@ -77,6 +78,8 @@ type VpnStatus struct {
 	LaunchOnStartup      bool     `json:"launch_on_startup"`
 	BypassLan            bool     `json:"bypass_lan"`
 	CustomBypassList     string   `json:"custom_bypass_list"`
+	RoutingMode          string   `json:"routing_mode"`
+	IsElevated           bool     `json:"is_elevated"`
 }
 
 type VpnService struct {
@@ -108,6 +111,7 @@ type VpnService struct {
 	socksServer         *proxy.Socks5Server
 	httpServer          *proxy.HttpProxyServer
 	sysProxy            *winproxy.SystemProxyManager
+	tunManager          *tun.TunnelManager
 	trafficStats        *proxy.TrafficStats
 
 	lastUploadSample    int64
@@ -166,6 +170,7 @@ func NewVpnService() (*VpnService, error) {
 		guardianClient:     gc,
 		serverRepo:         sRepo,
 		sysProxy:           sysProxy,
+		tunManager:          tun.NewTunnelManager(),
 		trafficStats:       stats,
 		appDir:             appDir,
 	}
@@ -413,18 +418,56 @@ func (s *VpnService) executeConnect(countryCode, cityCode string) error {
 		}
 	}
 
-	// Step 5: Toggle Windows System Proxy if enabled and not in Proxy-Only mode
-	if s.enableSystemProxy && !cfg.ProxyOnlyMode {
-		localHttp := fmt.Sprintf("127.0.0.1:%d", cfg.HttpProxyPort)
-		localSocks := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
-		bypassList := cfg.CustomBypassList
-		if cfg.BypassLan && !strings.Contains(bypassList, "192.168.*") {
-			bypassList += ";192.168.*;10.*;172.16.*;<local>"
-		}
-		if err := s.sysProxy.Enable(localHttp, localSocks, bypassList); err != nil {
-			logger.GetLogger().Warn("WinProxy", fmt.Sprintf("Failed setting Windows system proxy: %v", err))
+	// Step 5: Configure traffic routing based on active mode
+	routingMode := strings.ToLower(cfg.RoutingMode)
+	if routingMode == "" {
+		if cfg.ProxyOnlyMode {
+			routingMode = "proxy"
 		} else {
-			logger.GetLogger().Info("WinProxy", "Windows WinINet system proxy enabled")
+			routingMode = "system"
+		}
+	}
+
+	if routingMode == "tunnel" {
+		if s.sysProxy != nil {
+			_ = s.sysProxy.Disable()
+		}
+		if s.tunManager != nil {
+			if err := s.tunManager.Start(cfg.SocksPort, s.connectedNode); err != nil {
+				logger.GetLogger().Warn("TUN", fmt.Sprintf("Tunnel mode start failed: %v. Falling back to System Proxy.", err))
+				localHttp := fmt.Sprintf("127.0.0.1:%d", cfg.HttpProxyPort)
+				localSocks := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
+				bypassList := cfg.CustomBypassList
+				if cfg.BypassLan && !strings.Contains(bypassList, "192.168.*") {
+					bypassList += ";192.168.*;10.*;172.16.*;<local>"
+				}
+				_ = s.sysProxy.Enable(localHttp, localSocks, bypassList)
+			}
+		}
+	} else if routingMode == "system" {
+		if s.tunManager != nil {
+			_ = s.tunManager.Stop()
+		}
+		if s.enableSystemProxy && !cfg.ProxyOnlyMode {
+			localHttp := fmt.Sprintf("127.0.0.1:%d", cfg.HttpProxyPort)
+			localSocks := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
+			bypassList := cfg.CustomBypassList
+			if cfg.BypassLan && !strings.Contains(bypassList, "192.168.*") {
+				bypassList += ";192.168.*;10.*;172.16.*;<local>"
+			}
+			if err := s.sysProxy.Enable(localHttp, localSocks, bypassList); err != nil {
+				logger.GetLogger().Warn("WinProxy", fmt.Sprintf("Failed setting Windows system proxy: %v", err))
+			} else {
+				logger.GetLogger().Info("WinProxy", "Windows WinINet system proxy enabled")
+			}
+		}
+	} else {
+		// "proxy" mode
+		if s.tunManager != nil {
+			_ = s.tunManager.Stop()
+		}
+		if s.sysProxy != nil {
+			_ = s.sysProxy.Disable()
 		}
 	}
 
@@ -472,6 +515,9 @@ func (s *VpnService) Disconnect() error {
 }
 
 func (s *VpnService) executeDisconnect() error {
+	if s.tunManager != nil {
+		_ = s.tunManager.Stop()
+	}
 	if s.sysProxy != nil {
 		_ = s.sysProxy.Disable()
 	}
@@ -504,6 +550,56 @@ func (s *VpnService) SetTlsSplitMode(mode int) {
 
 	if s.upstreamManager != nil {
 		s.upstreamManager.SetSplitMode(upstream.TlsSplitMode(mode))
+	}
+}
+
+func (s *VpnService) SetRoutingMode(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mode = strings.ToLower(mode)
+	cfg := s.settingsStore.Get()
+	cfg.RoutingMode = mode
+	if mode == "proxy" {
+		cfg.ProxyOnlyMode = true
+		s.enableSystemProxy = false
+	} else if mode == "system" {
+		cfg.ProxyOnlyMode = false
+		s.enableSystemProxy = true
+	} else if mode == "tunnel" {
+		cfg.ProxyOnlyMode = false
+		s.enableSystemProxy = false
+	}
+	_ = s.settingsStore.Save(cfg)
+
+	if s.state == StateConnected {
+		if mode == "tunnel" {
+			if s.sysProxy != nil {
+				_ = s.sysProxy.Disable()
+			}
+			if s.tunManager != nil {
+				if err := s.tunManager.Start(cfg.SocksPort, s.connectedNode); err != nil {
+					logger.GetLogger().Warn("TUN", fmt.Sprintf("Wintun start failed: %v. Falling back to System Proxy.", err))
+					localHttp := fmt.Sprintf("127.0.0.1:%d", cfg.HttpProxyPort)
+					localSocks := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
+					_ = s.sysProxy.Enable(localHttp, localSocks, cfg.CustomBypassList)
+				}
+			}
+		} else if mode == "system" {
+			if s.tunManager != nil {
+				_ = s.tunManager.Stop()
+			}
+			localHttp := fmt.Sprintf("127.0.0.1:%d", cfg.HttpProxyPort)
+			localSocks := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
+			_ = s.sysProxy.Enable(localHttp, localSocks, cfg.CustomBypassList)
+		} else if mode == "proxy" {
+			if s.tunManager != nil {
+				_ = s.tunManager.Stop()
+			}
+			if s.sysProxy != nil {
+				_ = s.sysProxy.Disable()
+			}
+		}
 	}
 }
 
@@ -679,6 +775,8 @@ func (s *VpnService) GetStatus() VpnStatus {
 		LaunchOnStartup:      cfg.LaunchOnStartup,
 		BypassLan:            cfg.BypassLan,
 		CustomBypassList:     cfg.CustomBypassList,
+		RoutingMode:          cfg.RoutingMode,
+		IsElevated:           tun.IsElevated(),
 	}
 }
 

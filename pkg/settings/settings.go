@@ -31,6 +31,7 @@ type AppSettings struct {
 	LaunchOnStartup       bool   `json:"launch_on_startup"`
 	BypassLan             bool   `json:"bypass_lan"`
 	CustomBypassList      string `json:"custom_bypass_list"`
+	RoutingMode           string `json:"routing_mode"`
 }
 
 func DefaultSettings() AppSettings {
@@ -58,6 +59,7 @@ func DefaultSettings() AppSettings {
 		LaunchOnStartup:       false,
 		BypassLan:             true,
 		CustomBypassList:      "<local>;192.168.0.0/16;10.0.0.0/8;172.16.0.0/12;127.0.0.1;localhost",
+		RoutingMode:           "system",
 	}
 }
 

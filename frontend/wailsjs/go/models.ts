@@ -42,6 +42,8 @@ export namespace core {
 	    launch_on_startup: boolean;
 	    bypass_lan: boolean;
 	    custom_bypass_list: string;
+	    routing_mode: string;
+	    is_elevated: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new VpnStatus(source);
@@ -90,6 +92,8 @@ export namespace core {
 	        this.launch_on_startup = source["launch_on_startup"];
 	        this.bypass_lan = source["bypass_lan"];
 	        this.custom_bypass_list = source["custom_bypass_list"];
+	        this.routing_mode = source["routing_mode"];
+	        this.is_elevated = source["is_elevated"];
 	    }
 	}
 
@@ -299,6 +303,7 @@ export namespace settings {
 	    launch_on_startup: boolean;
 	    bypass_lan: boolean;
 	    custom_bypass_list: string;
+	    routing_mode: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppSettings(source);
@@ -329,6 +334,7 @@ export namespace settings {
 	        this.launch_on_startup = source["launch_on_startup"];
 	        this.bypass_lan = source["bypass_lan"];
 	        this.custom_bypass_list = source["custom_bypass_list"];
+	        this.routing_mode = source["routing_mode"];
 	    }
 	}
 

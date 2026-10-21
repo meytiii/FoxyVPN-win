@@ -31,6 +31,9 @@ func main() {
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			if app.IsQuitting() {
+				return false
+			}
 			cfg := app.GetSettings()
 			if cfg.CloseToTray {
 				runtime.WindowHide(ctx)

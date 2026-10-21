@@ -7,7 +7,9 @@
     GetCountries,
     SetSelectedCountry,
     SetSystemProxyEnabled,
-    PingAllServers
+    PingAllServers,
+    GetSettings,
+    UpdateSettings
   } from '../wailsjs/go/main/App.js';
   import { EventsOn, EventsOff, BrowserOpenURL } from '../wailsjs/runtime/runtime.js';
   import type { core, remotesettings } from '../wailsjs/go/models';
@@ -72,7 +74,9 @@
   let showSettingsModal = false;
   let showLogsModal = false;
 
-  // Connection timer
+  // Connection timer & routing mode
+  type RoutingMode = 'system' | 'proxy' | 'tunnel';
+  let currentMode: RoutingMode = 'system';
   let connectedSeconds = 0;
   let timerInterval: any = null;
   let pollInterval: any = null;
@@ -80,6 +84,7 @@
 
   onMount(async () => {
     await refreshStatus();
+    await refreshRoutingMode();
     try {
       countries = await GetCountries();
     } catch (e) {
@@ -211,13 +216,55 @@
     }
   }
 
-  async function toggleSystemProxy() {
-    const nextVal = !status.system_proxy_enabled;
+  async function refreshRoutingMode() {
     try {
-      await SetSystemProxyEnabled(nextVal);
-      status.system_proxy_enabled = nextVal;
+      const s = await GetSettings();
+      if (s) {
+        if (s.proxy_only_mode) {
+          currentMode = 'proxy';
+        } else if (currentMode === 'tunnel') {
+          // Keep user choice
+        } else if (status.system_proxy_enabled) {
+          currentMode = 'system';
+        } else {
+          currentMode = 'system';
+        }
+      }
     } catch (e) {
-      console.error('Failed toggling system proxy:', e);
+      console.warn('Failed to load routing mode settings:', e);
+    }
+  }
+
+  async function handleSelectMode(mode: RoutingMode) {
+    currentMode = mode;
+    try {
+      const s = await GetSettings();
+      if (mode === 'system') {
+        if (s) {
+          s.proxy_only_mode = false;
+          await UpdateSettings(s);
+        }
+        await SetSystemProxyEnabled(true);
+        status.system_proxy_enabled = true;
+      } else if (mode === 'proxy') {
+        if (s) {
+          s.proxy_only_mode = true;
+          await UpdateSettings(s);
+        }
+        await SetSystemProxyEnabled(false);
+        status.system_proxy_enabled = false;
+      } else if (mode === 'tunnel') {
+        // Tunnel mode (Wintun) under development: enable System Proxy as fallback
+        if (s) {
+          s.proxy_only_mode = false;
+          await UpdateSettings(s);
+        }
+        await SetSystemProxyEnabled(true);
+        status.system_proxy_enabled = true;
+      }
+      await refreshStatus();
+    } catch (e) {
+      console.error('Failed to update routing mode:', e);
     }
   }
 
@@ -498,6 +545,80 @@
     </div>
   </section>
 
+  <!-- Unified Routing Mode Selector (System Proxy / Proxy Mode / Tunnel Mode) -->
+  <section class="mode-selector-section">
+    <div class="mode-selector-track" role="radiogroup" aria-label="VPN Traffic Routing Mode">
+      <!-- System Proxy Button -->
+      <button 
+        type="button" 
+        class="mode-btn" 
+        class:active={currentMode === 'system'}
+        role="radio"
+        aria-checked={currentMode === 'system'}
+        on:click={() => handleSelectMode('system')}
+        title="Windows System Proxy: Auto-route Edge, Chrome & Windows apps via WinINet"
+      >
+        <span class="mode-indicator" class:indicator-on={currentMode === 'system'}></span>
+        <svg class="mode-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+          <line x1="8" y1="21" x2="16" y2="21"/>
+          <line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+        <span class="mode-label">System Proxy</span>
+      </button>
+
+      <!-- Proxy Mode Button -->
+      <button 
+        type="button" 
+        class="mode-btn" 
+        class:active={currentMode === 'proxy'}
+        role="radio"
+        aria-checked={currentMode === 'proxy'}
+        on:click={() => handleSelectMode('proxy')}
+        title="Proxy Mode: Run local SOCKS5 & HTTP proxies only without modifying system settings"
+      >
+        <span class="mode-indicator" class:indicator-on={currentMode === 'proxy'}></span>
+        <svg class="mode-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="16 18 22 12 16 6"/>
+          <polyline points="8 6 2 12 8 18"/>
+        </svg>
+        <span class="mode-label">Proxy Mode</span>
+      </button>
+
+      <!-- Tunnel Mode Button -->
+      <button 
+        type="button" 
+        class="mode-btn mode-btn-tunnel" 
+        class:active={currentMode === 'tunnel'}
+        role="radio"
+        aria-checked={currentMode === 'tunnel'}
+        on:click={() => handleSelectMode('tunnel')}
+        title="Tunnel Mode: Route all device IP traffic via virtual TUN interface (In Development)"
+      >
+        <span class="mode-indicator" class:indicator-on={currentMode === 'tunnel'}></span>
+        <svg class="mode-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <span class="mode-label">Tunnel Mode</span>
+        <span class="mode-badge-soon">SOON</span>
+      </button>
+    </div>
+
+    <!-- Mode Contextual Info Helper -->
+    <div class="mode-status-line">
+      {#if currentMode === 'system'}
+        <span class="mode-status-dot green"></span>
+        <span class="mode-status-desc"><strong>System Proxy:</strong> WinINet auto-routes Edge, Chrome & Windows apps</span>
+      {:else if currentMode === 'proxy'}
+        <span class="mode-status-dot amber"></span>
+        <span class="mode-status-desc"><strong>Proxy Mode:</strong> SOCKS5 (:1080) & HTTP (:8080) on localhost (system untouched)</span>
+      {:else if currentMode === 'tunnel'}
+        <span class="mode-status-dot purple"></span>
+        <span class="mode-status-desc"><strong>Tunnel Mode (Wintun):</strong> TUN driver in progress • Protected via System Proxy</span>
+      {/if}
+    </div>
+  </section>
+
   <!-- Telemetry Bento Grid -->
   <section class="bento-grid">
     <!-- Live Speeds -->
@@ -542,23 +663,13 @@
 
   <!-- Quick Settings Controls -->
   <footer class="quick-controls">
-    <button type="button" class="toggle-row" on:click={toggleSystemProxy}>
-      <div class="toggle-info">
-        <div class="toggle-name">Windows System Proxy (WinINet)</div>
-        <div class="toggle-desc">Automatically route Edge, Chrome & Windows apps</div>
-      </div>
-      <div class="switch" class:active={status.system_proxy_enabled}>
-        <div class="switch-handle"></div>
-      </div>
-    </button>
-
     <div class="ports-strip">
       <button type="button" class="github-star-pill font-mono" on:click={handleOpenGithub} title="Star FoxyVPN on GitHub">
         ★ Star on GitHub
       </button>
       <span class="port-label">Proxy:</span>
-      <span class="port-pill font-mono">SOCKS5 :{status.socks_port}</span>
-      <span class="port-pill font-mono">HTTP :{status.http_port}</span>
+      <span class="port-pill font-mono" class:highlighted={currentMode === 'proxy'}>SOCKS5 :{status.socks_port}</span>
+      <span class="port-pill font-mono" class:highlighted={currentMode === 'proxy'}>HTTP :{status.http_port}</span>
     </div>
   </footer>
 
@@ -574,7 +685,7 @@
 
   <SettingsModal 
     show={showSettingsModal} 
-    onClose={() => showSettingsModal = false} 
+    onClose={() => { showSettingsModal = false; refreshRoutingMode(); }} 
   />
 
   <AccountModal 
@@ -1183,63 +1294,149 @@
     padding-top: 4px;
   }
 
-  .toggle-row {
-    width: 100%;
+  /* Routing Mode Selector Styles */
+  .mode-selector-section {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px;
-    background: var(--bg-card);
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .mode-selector-track {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--border-subtle);
     border-radius: 12px;
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.2s ease;
+    padding: 3px;
+    gap: 4px;
   }
 
-  .toggle-row:hover {
-    background: var(--bg-card-hover);
-  }
-
-  .toggle-name {
-    font-size: 0.82rem;
-    font-weight: 700;
-    color: var(--text-white);
-  }
-
-  .toggle-desc {
-    font-size: 0.68rem;
+  .mode-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 7px 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
     color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    user-select: none;
   }
 
-  .switch {
-    width: 38px;
-    height: 22px;
-    border-radius: 11px;
-    background: rgba(255, 255, 255, 0.12);
-    position: relative;
-    transition: background 0.25s ease;
+  .mode-btn:hover {
+    color: var(--text-white);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .mode-btn.active {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.18);
+  }
+
+  .mode-btn.active.mode-btn-tunnel {
+    background: rgba(168, 85, 247, 0.14);
+    border-color: rgba(168, 85, 247, 0.45);
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(168, 85, 247, 0.2);
+  }
+
+  .mode-indicator {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    transition: all 0.2s;
     flex-shrink: 0;
   }
 
-  .switch.active {
+  .mode-btn.active .mode-indicator.indicator-on {
     background: #10b981;
+    box-shadow: 0 0 6px #10b981;
   }
 
-  .switch-handle {
-    width: 16px;
-    height: 16px;
+  .mode-btn.active.mode-btn-tunnel .mode-indicator.indicator-on {
+    background: #c084fc;
+    box-shadow: 0 0 6px #c084fc;
+  }
+
+  .mode-icon {
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
+
+  .mode-btn.active .mode-icon {
+    opacity: 1;
+  }
+
+  .mode-label {
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+  }
+
+  .mode-badge-soon {
+    font-size: 0.54rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: rgba(168, 85, 247, 0.25);
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    color: #e9d5ff;
+    line-height: 1.1;
+  }
+
+  .mode-status-line {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 3px 8px;
+    font-size: 0.63rem;
+    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .mode-status-dot {
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
-    background: #ffffff;
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    transition: transform 0.25s ease;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    flex-shrink: 0;
   }
 
-  .switch.active .switch-handle {
-    transform: translateX(16px);
+  .mode-status-dot.green {
+    background: #10b981;
+    box-shadow: 0 0 5px #10b981;
+  }
+
+  .mode-status-dot.amber {
+    background: #f59e0b;
+    box-shadow: 0 0 5px #f59e0b;
+  }
+
+  .mode-status-dot.purple {
+    background: #a855f7;
+    box-shadow: 0 0 5px #a855f7;
+  }
+
+  .mode-status-desc {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mode-status-desc strong {
+    color: var(--text-muted);
   }
 
   .ports-strip {
@@ -1365,8 +1562,14 @@
     .location-card {
       padding: 8px 12px;
     }
-    .toggle-row {
-      padding: 8px 12px;
+    .mode-btn {
+      padding: 5px 3px;
+      font-size: 0.67rem;
+      gap: 3px;
+    }
+    .mode-status-line {
+      font-size: 0.58rem;
+      padding: 2px 6px;
     }
   }
 </style>

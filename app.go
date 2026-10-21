@@ -16,9 +16,10 @@ import (
 
 // App struct manages the desktop application lifecycle and Go-Frontend bridge.
 type App struct {
-	ctx     context.Context
-	service *core.VpnService
-	tray    *winutil.TrayManager
+	ctx              context.Context
+	service          *core.VpnService
+	tray             *winutil.TrayManager
+	notifiedTrayOnce bool
 }
 
 // NewApp creates a new App application instance.
@@ -163,6 +164,24 @@ func (a *App) UpdateSettings(cfg settings.AppSettings) error {
 		return fmt.Errorf("service uninitialized")
 	}
 	return a.service.UpdateSettings(cfg)
+}
+
+// ResetSettings restores default application settings.
+func (a *App) ResetSettings() (settings.AppSettings, error) {
+	defaults := settings.DefaultSettings()
+	if a.service == nil {
+		return defaults, fmt.Errorf("service uninitialized")
+	}
+	err := a.service.UpdateSettings(defaults)
+	return defaults, err
+}
+
+// NotifyMinimizedToTray shows a balloon notification on first close-to-tray.
+func (a *App) NotifyMinimizedToTray() {
+	if a.tray != nil && !a.notifiedTrayOnce {
+		a.notifiedTrayOnce = true
+		a.tray.ShowNotification("FoxyVPN Running", "FoxyVPN is minimized to the system tray. Click the tray icon to restore the window.")
+	}
 }
 
 // PingServer measures latency to a specific edge node.

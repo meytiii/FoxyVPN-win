@@ -34,11 +34,15 @@ export function GetSettings():Promise<settings.AppSettings>;
 
 export function GetStatus():Promise<core.VpnStatus>;
 
+export function NotifyMinimizedToTray():Promise<void>;
+
 export function PingAllServers():Promise<Record<string, number>>;
 
 export function PingServer(arg1:string,arg2:number):Promise<number>;
 
 export function QuitApplication():Promise<void>;
+
+export function ResetSettings():Promise<settings.AppSettings>;
 
 export function SetSelectedCountry(arg1:string,arg2:string):Promise<void>;
 

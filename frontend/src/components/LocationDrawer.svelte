@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { SetSelectedCountry, PingAllServers, GetCountries } from '../../wailsjs/go/main/App.js';
   import type { remotesettings } from '../../wailsjs/go/models';
 
@@ -15,6 +15,39 @@
   let pings: Record<string, number> = {};
   let pinging = false;
   let expanded: Record<string, boolean> = {};
+  let highlightedIndex = 0;
+  let searchInputRef: HTMLInputElement | null = null;
+  let listContainerRef: HTMLElement | null = null;
+
+  function focusTrap(node: HTMLElement) {
+    const focusableSelectors = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const focusable = Array.from(node.querySelectorAll<HTMLElement>(focusableSelectors)).filter(
+        el => !el.hasAttribute('disabled') && el.offsetParent !== null
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        }
+      } else {
+        if (document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
+    }
+    node.addEventListener('keydown', handleKeyDown);
+    return {
+      destroy() {
+        node.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+  }
 
   async function ensureCountries() {
     if (!countries || countries.length === 0) {
@@ -42,19 +75,13 @@
   $: if (show) {
     ensureCountries();
     refreshPings();
+    highlightedIndex = 0;
+    tick().then(() => searchInputRef?.focus());
   }
 
   onMount(() => {
     ensureCountries();
   });
-
-  function getCountryFlag(code: string): string {
-    if (!code || code === 'REC' || code.length !== 2) return '🌐';
-    const upper = code.toUpperCase();
-    const first = upper.charCodeAt(0) - 65 + 0x1f1e6;
-    const second = upper.charCodeAt(1) - 65 + 0x1f1e6;
-    return String.fromCodePoint(first, second);
-  }
 
   function getBestPingForCountry(country: remotesettings.VpnCountry): number {
     if (country.code === 'REC') {
@@ -93,6 +120,10 @@
     return a.name.localeCompare(b.name);
   });
 
+  $: if (searchQuery !== undefined) {
+    highlightedIndex = 0;
+  }
+
   function toggleExpand(code: string) {
     expanded[code] = !expanded[code];
   }
@@ -101,6 +132,42 @@
     await SetSelectedCountry(countryCode, cityCode);
     onSelect(countryCode, cityCode);
     onClose();
+  }
+
+  function handleSearchKeyDown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (sortedCountries.length > 0) {
+        highlightedIndex = Math.min(sortedCountries.length - 1, highlightedIndex + 1);
+        scrollHighlightedIntoView();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (sortedCountries.length > 0) {
+        highlightedIndex = Math.max(0, highlightedIndex - 1);
+        scrollHighlightedIntoView();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (sortedCountries.length > 0 && sortedCountries[highlightedIndex]) {
+        const c = sortedCountries[highlightedIndex];
+        if (c.code === 'REC' || !c.cities || c.cities.length <= 1) {
+          const city = c.cities && c.cities[0] ? c.cities[0].code : '';
+          handlePick(c.code, city);
+        } else {
+          toggleExpand(c.code);
+        }
+      }
+    }
+  }
+
+  function scrollHighlightedIntoView() {
+    tick().then(() => {
+      const el = listContainerRef?.querySelector<HTMLElement>(`.country-group[data-index="${highlightedIndex}"]`);
+      if (el) {
+        el.scrollIntoView({ block: 'nearest' });
+      }
+    });
   }
 </script>
 
@@ -113,7 +180,7 @@
     on:click={(e) => { if (e.target === e.currentTarget) onClose(); }}
     on:keydown={(e) => { if (e.key === 'Escape') onClose(); }}
   >
-    <div class="drawer-panel" role="document">
+    <div class="drawer-panel" role="document" use:focusTrap>
       <div class="drawer-header">
         <div class="header-left">
           <h3>Choose Location</h3>
@@ -123,34 +190,55 @@
           <button class="refresh-btn" class:spinning={pinging} title="Refresh all server pings" on:click={refreshPings}>
             ↻
           </button>
-          <button class="close-btn" on:click={onClose}>✕</button>
+          <button class="close-btn" aria-label="Close" on:click={onClose}>✕</button>
         </div>
       </div>
 
       <div class="search-bar">
-        <input
-          type="text"
-          placeholder="Search country or city..."
-          bind:value={searchQuery}
-        />
+        <div class="search-input-wrapper">
+          <input
+            type="text"
+            placeholder="Search country or city..."
+            bind:value={searchQuery}
+            bind:this={searchInputRef}
+            on:keydown={handleSearchKeyDown}
+          />
+          {#if searchQuery.length > 0}
+            <button 
+              type="button" 
+              class="clear-search-btn" 
+              aria-label="Clear search" 
+              on:click={() => { searchQuery = ''; searchInputRef?.focus(); }}
+            >
+              ✕
+            </button>
+          {/if}
+        </div>
         <div class="sort-toggle">
           <button class:active={sortBy === 'latency'} on:click={() => (sortBy = 'latency')}>⚡ Ping</button>
           <button class:active={sortBy === 'name'} on:click={() => (sortBy = 'name')}>A–Z</button>
         </div>
       </div>
 
-      <div class="country-list">
-        {#each sortedCountries as country (country.code)}
+      <div class="country-list" bind:this={listContainerRef}>
+        {#each sortedCountries as country, idx (country.code)}
           {@const isSelectedCountry = selectedCountryCode === country.code}
           {@const bestPing = getBestPingForCountry(country)}
           {@const isExpanded = expanded[country.code] || searchQuery.length > 0}
+          {@const isHighlighted = idx === highlightedIndex}
 
-          <div class="country-group" class:selected={isSelectedCountry}>
+          <div 
+            class="country-group" 
+            class:selected={isSelectedCountry}
+            class:highlighted={isHighlighted}
+            data-index={idx}
+          >
             <div 
               class="country-row" 
               role="button" 
               tabindex="0"
               on:click={() => {
+                highlightedIndex = idx;
                 if (country.code === 'REC' || !country.cities || country.cities.length <= 1) {
                   const city = country.cities && country.cities[0] ? country.cities[0].code : '';
                   handlePick(country.code, city);
@@ -170,7 +258,11 @@
               }}
             >
               <div class="country-info">
-                <span class="flag-icon">{getCountryFlag(country.code)}</span>
+                {#if country.code === 'REC'}
+                  <span class="flag-pill rec">⚡ AUTO</span>
+                {:else}
+                  <span class="flag-pill">{country.code}</span>
+                {/if}
                 <div class="name-box">
                   <span class="country-name">{country.name}</span>
                   {#if country.code === 'REC'}
@@ -331,18 +423,41 @@
     gap: 8px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   }
-  .search-bar input {
+  .search-input-wrapper {
     flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .search-input-wrapper input {
+    width: 100%;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 8px 12px;
+    padding: 8px 32px 8px 12px;
     border-radius: 8px;
     color: white;
     font-size: 0.82rem;
     outline: none;
   }
-  .search-bar input:focus {
+  .search-input-wrapper input:focus {
     border-color: var(--fox-primary);
+  }
+  .clear-search-btn {
+    position: absolute;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .clear-search-btn:hover {
+    color: white;
   }
   .sort-toggle {
     display: flex;
@@ -390,6 +505,10 @@
     border-color: rgba(255, 102, 0, 0.4);
     background: rgba(255, 102, 0, 0.06);
   }
+  .country-group.highlighted {
+    border-color: rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.06);
+  }
   .country-row {
     min-height: 52px;
     padding: 12px 14px;
@@ -404,15 +523,29 @@
     align-items: center;
     gap: 12px;
   }
-  .flag-icon {
-    font-size: 1.4rem;
-    font-family: 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif;
+  .flag-pill {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    min-width: 32px;
+    height: 24px;
+    padding: 0 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: #e2e8f0;
+    letter-spacing: 0.04em;
     flex-shrink: 0;
+  }
+  .flag-pill.rec {
+    background: rgba(255, 87, 34, 0.15);
+    border-color: rgba(255, 87, 34, 0.3);
+    color: var(--fox-primary);
+    font-size: 0.65rem;
+    min-width: 60px;
   }
   .name-box {
     display: flex;

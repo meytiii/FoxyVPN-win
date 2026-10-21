@@ -18,11 +18,56 @@
   let loading = false;
   let errorMessage = '';
 
+  let showPassword = false;
+  let showSignOutConfirm = false;
+
+  $: if (show) {
+    showSignOutConfirm = false;
+    showPassword = false;
+    errorMessage = '';
+  }
+
+  function focusTrap(node: HTMLElement) {
+    const focusableSelectors = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const focusable = Array.from(node.querySelectorAll<HTMLElement>(focusableSelectors)).filter(
+        el => !el.hasAttribute('disabled') && el.offsetParent !== null
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        }
+      } else {
+        if (document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
+    }
+    node.addEventListener('keydown', handleKeyDown);
+    return {
+      destroy() {
+        node.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+  }
+
   function formatBytes(bytes: number): string {
     if (!bytes || bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+  }
+
+  function handleBackToLogin() {
+    needs2FA = false;
+    twoFactorCode = '';
+    errorMessage = '';
   }
 
   async function handleLogin() {
@@ -62,6 +107,7 @@
       errorMessage = e?.message || String(e);
     } finally {
       loading = false;
+      showSignOutConfirm = false;
     }
   }
 </script>
@@ -75,10 +121,10 @@
     on:click={(e) => { if (e.target === e.currentTarget) onClose(); }}
     on:keydown={(e) => { if (e.key === 'Escape') onClose(); }}
   >
-    <div class="modal-box" role="document">
+    <div class="modal-box" role="document" use:focusTrap>
       <div class="modal-header">
         <h3>Firefox Account</h3>
-        <button class="close-btn" on:click={onClose}>✕</button>
+        <button class="close-btn" aria-label="Close" on:click={onClose}>✕</button>
       </div>
 
       <div class="modal-body">
@@ -109,9 +155,23 @@
             {/if}
           </div>
 
-          <button class="btn-signout" on:click={handleSignOut} disabled={loading}>
-            {loading ? 'Signing out...' : 'Sign Out of Firefox Account'}
-          </button>
+          {#if showSignOutConfirm}
+            <div class="signout-confirm-box">
+              <span class="confirm-msg">Sign out of Firefox Account?</span>
+              <div class="confirm-actions">
+                <button class="btn-danger-confirm" on:click={handleSignOut} disabled={loading}>
+                  {loading ? 'Signing out...' : 'Yes, Sign Out'}
+                </button>
+                <button class="btn-cancel-inline" on:click={() => (showSignOutConfirm = false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          {:else}
+            <button class="btn-signout" on:click={() => (showSignOutConfirm = true)}>
+              Sign Out of Firefox Account
+            </button>
+          {/if}
         {:else}
           <div class="auth-intro">
             <p>Sign in with your Firefox Account to acquire monthly subscription-free Guardian VPN proxy passes.</p>
@@ -127,16 +187,45 @@
               <input type="email" placeholder="name@example.com" bind:value={email} />
             </label>
 
-            <label class="form-group">
+            <div class="form-group">
               <span class="form-label">Password</span>
-              <input type="password" placeholder="••••••••••••" bind:value={password} />
-            </label>
+              <div class="password-input-wrapper">
+                {#if showPassword}
+                  <input type="text" placeholder="••••••••••••" bind:value={password} />
+                {:else}
+                  <input type="password" placeholder="••••••••••••" bind:value={password} />
+                {/if}
+                <button 
+                  type="button" 
+                  class="toggle-pwd-btn" 
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  on:click={() => (showPassword = !showPassword)}
+                >
+                  {#if showPassword}
+                    <!-- Eye Off SVG -->
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                      <line x1="1" y1="1" x2="23" y2="23"></line>
+                    </svg>
+                  {:else}
+                    <!-- Eye SVG -->
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                  {/if}
+                </button>
+              </div>
+            </div>
           {:else}
             <label class="form-group">
               <span class="form-label">Two-Factor Verification Code (2FA)</span>
               <input type="text" placeholder="Enter 6-digit code or backup code" bind:value={twoFactorCode} />
               <span class="hint">Check your authenticator app or email for code</span>
             </label>
+            <button type="button" class="btn-back-link" on:click={handleBackToLogin}>
+              ← Back to Email & Password
+            </button>
           {/if}
 
           <button class="btn-submit" on:click={handleLogin} disabled={loading}>
@@ -327,6 +416,87 @@
   }
   .form-group input:focus {
     border-color: var(--fox-primary);
+  }
+  .password-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .password-input-wrapper input {
+    width: 100%;
+    padding-right: 36px;
+  }
+  .toggle-pwd-btn {
+    position: absolute;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .toggle-pwd-btn:hover {
+    color: white;
+  }
+  .btn-back-link {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    cursor: pointer;
+    text-align: left;
+    padding: 4px 0;
+    transition: color 0.2s;
+  }
+  .btn-back-link:hover {
+    color: var(--fox-primary);
+  }
+  .signout-confirm-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: 10px;
+  }
+  .confirm-msg {
+    font-size: 0.8rem;
+    color: #fca5a5;
+    font-weight: 600;
+  }
+  .confirm-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .btn-danger-confirm {
+    background: #ef4444;
+    border: none;
+    color: white;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-danger-confirm:hover {
+    filter: brightness(1.15);
+  }
+  .btn-cancel-inline {
+    background: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: var(--text-dim);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .btn-cancel-inline:hover {
+    color: white;
   }
   .hint {
     font-size: 0.7rem;

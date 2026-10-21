@@ -34,6 +34,7 @@ func main() {
 			cfg := app.GetSettings()
 			if cfg.CloseToTray {
 				runtime.WindowHide(ctx)
+				app.NotifyMinimizedToTray()
 				return true
 			}
 			return false

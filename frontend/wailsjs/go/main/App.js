@@ -58,6 +58,10 @@ export function GetStatus() {
   return window['go']['main']['App']['GetStatus']();
 }
 
+export function NotifyMinimizedToTray() {
+  return window['go']['main']['App']['NotifyMinimizedToTray']();
+}
+
 export function PingAllServers() {
   return window['go']['main']['App']['PingAllServers']();
 }
@@ -68,6 +72,10 @@ export function PingServer(arg1, arg2) {
 
 export function QuitApplication() {
   return window['go']['main']['App']['QuitApplication']();
+}
+
+export function ResetSettings() {
+  return window['go']['main']['App']['ResetSettings']();
 }
 
 export function SetSelectedCountry(arg1, arg2) {

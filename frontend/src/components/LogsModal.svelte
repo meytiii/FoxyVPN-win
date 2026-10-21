@@ -51,6 +51,49 @@
     });
   });
 
+  function handleScroll() {
+    if (!logContainer) return;
+    const atBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 60;
+    autoScroll = atBottom;
+  }
+
+  function scrollToBottom() {
+    autoScroll = true;
+    if (logContainer) {
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+  }
+
+  function focusTrap(node: HTMLElement) {
+    const focusableSelectors = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const focusable = Array.from(node.querySelectorAll<HTMLElement>(focusableSelectors)).filter(
+        el => !el.hasAttribute('disabled') && el.offsetParent !== null
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        }
+      } else {
+        if (document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
+    }
+    node.addEventListener('keydown', handleKeyDown);
+    return {
+      destroy() {
+        node.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+  }
+
   onDestroy(() => {
     EventsOff('vpn:log');
   });
@@ -96,7 +139,7 @@
     on:click={(e) => { if (e.target === e.currentTarget) onClose(); }}
     on:keydown={(e) => { if (e.key === 'Escape') onClose(); }}
   >
-    <div class="modal-box" role="document">
+    <div class="modal-box" role="document" use:focusTrap>
       <div class="modal-header">
         <div class="header-title">
           <svg viewBox="0 0 24 24" class="header-icon" fill="none" stroke="currentColor">
@@ -105,7 +148,7 @@
           <h3>Diagnostic Logs</h3>
           <span class="count-badge">{logs.length}</span>
         </div>
-        <button class="close-btn" on:click={onClose}>✕</button>
+        <button class="close-btn" aria-label="Close diagnostic logs" on:click={onClose}>✕</button>
       </div>
 
       <div class="filter-bar">
@@ -131,7 +174,7 @@
         <div class="toast-msg">{exportMessage}</div>
       {/if}
 
-      <div class="logs-console" bind:this={logContainer}>
+      <div class="logs-console" bind:this={logContainer} on:scroll={handleScroll}>
         {#if logs.length === 0}
           <div class="empty-state">No log entries captured yet.</div>
         {:else}
@@ -145,6 +188,12 @@
           {/each}
         {/if}
       </div>
+
+      {#if !autoScroll}
+        <button class="scroll-bottom-btn" on:click={scrollToBottom}>
+          ↓ Jump to latest
+        </button>
+      {/if}
     </div>
   </div>
 {/if}
@@ -323,5 +372,25 @@
   }
   .level-error {
     background: rgba(239, 68, 68, 0.1);
+  }
+  .scroll-bottom-btn {
+    position: absolute;
+    bottom: 20px;
+    right: 24px;
+    background: rgba(255, 87, 34, 0.9);
+    color: white;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    z-index: 20;
+    transition: all 0.2s;
+  }
+  .scroll-bottom-btn:hover {
+    background: #ff5722;
+    transform: translateY(-1px);
   }
 </style>

@@ -151,12 +151,15 @@
   async function handleToggleConnect() {
     if (status.state === 'CONNECTED') {
       try {
-        status.state = 'DISCONNECTED';
+        status.state = 'DISCONNECTING';
         await Disconnect();
-        await refreshStatus();
       } catch (e) {
         console.error('Disconnect error:', e);
+      } finally {
+        await refreshStatus();
       }
+    } else if (status.state === 'CONNECTING') {
+      await handleCancelConnect();
     } else {
       if (!status.is_signed_in) {
         showAccountModal = true;
@@ -169,6 +172,18 @@
         console.error('Connect error:', e);
         status.state = 'ERROR';
       }
+    }
+  }
+
+  async function handleCancelConnect() {
+    try {
+      status.state = 'DISCONNECTING';
+      await Disconnect();
+    } catch (e) {
+      console.warn('Cancel connect error:', e);
+    } finally {
+      status.state = 'DISCONNECTED';
+      await refreshStatus();
     }
   }
 
@@ -377,10 +392,9 @@
       class="power-orb" 
       aria-label="Toggle VPN Connection"
       class:connected={status.state === 'CONNECTED'} 
-      class:connecting={status.state === 'CONNECTING'}
+      class:connecting={status.state === 'CONNECTING' || status.state === 'DISCONNECTING'}
       class:error={status.state === 'ERROR'}
       on:click={handleToggleConnect}
-      disabled={status.state === 'CONNECTING'}
     >
       <div class="power-ring-outer"></div>
       <div class="power-ring-inner">
@@ -398,6 +412,10 @@
       {:else if status.state === 'CONNECTING'}
         <div class="status-badge connecting">ESTABLISHING TUNNEL...</div>
         <div class="status-hint">Solving challenge & negotiating HTTP/2 TLS 1.3</div>
+        <button type="button" class="btn-cancel-connect" on:click={handleCancelConnect}>Cancel Connection</button>
+      {:else if status.state === 'DISCONNECTING'}
+        <div class="status-badge connecting">DISCONNECTING...</div>
+        <div class="status-hint">Restoring system proxy & terminating H2 tunnel</div>
       {:else if status.state === 'ERROR'}
         <div class="status-badge error">CONNECTION FAILED</div>
         <div class="status-hint">{status.error_message || 'Tap orb to retry connection'}</div>
@@ -417,7 +435,13 @@
       on:click={() => showLocationModal = true}
       on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showLocationModal = true; }}
     >
-      <div class="location-flag">{getCountryFlag(status.selected_country)}</div>
+      <div class="location-flag">
+        {#if !status.selected_country || status.selected_country === 'REC'}
+          <span class="flag-globe">🌐</span>
+        {:else}
+          <span class="flag-pill">{status.selected_country}</span>
+        {/if}
+      </div>
       <div class="location-details">
         <div class="location-title">
           {selectedCountryName}
@@ -1208,5 +1232,79 @@
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--border-subtle);
     color: var(--text-muted);
+  }
+
+  .flag-globe {
+    font-size: 1.35rem;
+    line-height: 1;
+  }
+
+  .flag-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 800;
+    font-family: var(--font-mono);
+    padding: 3px 6px;
+    border-radius: 6px;
+    background: rgba(255, 87, 34, 0.15);
+    border: 1px solid rgba(255, 87, 34, 0.35);
+    color: #ff5722;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-cancel-connect {
+    margin-top: 6px;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+    padding: 3px 12px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-cancel-connect:hover {
+    background: rgba(239, 68, 68, 0.28);
+    color: white;
+  }
+
+  /* Responsive compact scaling for minimum window height (640px) and High-DPI displays */
+  @media (max-height: 720px) {
+    .app-layout {
+      padding: 10px 16px;
+      gap: 10px;
+    }
+    .reactor-container {
+      padding: 12px 0 8px;
+    }
+    .power-orb {
+      width: 96px;
+      height: 96px;
+    }
+    .power-ring-inner {
+      width: 72px;
+      height: 72px;
+    }
+    .power-icon {
+      width: 30px;
+      height: 30px;
+    }
+    .orbital-glow {
+      width: 130px;
+      height: 130px;
+    }
+    .bento-card {
+      padding: 8px 10px;
+    }
+    .location-card {
+      padding: 8px 12px;
+    }
+    .toggle-row {
+      padding: 8px 12px;
+    }
   }
 </style>

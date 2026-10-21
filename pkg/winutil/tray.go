@@ -27,6 +27,8 @@ var (
 	procCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
 	procAppendMenuW              = user32.NewProc("AppendMenuW")
 	procTrackPopupMenu           = user32.NewProc("TrackPopupMenu")
+	procDestroyMenu              = user32.NewProc("DestroyMenu")
+	procPostMessageW             = user32.NewProc("PostMessageW")
 	procSetForeground            = user32.NewProc("SetForegroundWindow")
 	procGetCursorPos             = user32.NewProc("GetCursorPos")
 	procLoadIconW                = user32.NewProc("LoadIconW")
@@ -44,6 +46,8 @@ const (
 	NIF_MESSAGE    = 0x00000001
 	NIF_ICON       = 0x00000002
 	NIF_TIP        = 0x00000004
+	NIF_INFO       = 0x00000010
+	NIIF_INFO      = 0x00000001
 	WM_USER        = 0x0400
 	WM_TRAYICON    = WM_USER + 101
 	WM_COMMAND     = 0x0111
@@ -112,10 +116,13 @@ var globalTray *TrayManager
 func trayWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	if msg == WM_TRAYICON {
 		switch lParam {
-		case WM_LBUTTONUP, WM_LBUTTONDBL:
+		case WM_LBUTTONUP:
 			if globalTray != nil && globalTray.onShow != nil {
 				go globalTray.onShow()
 			}
+			return 0
+		case WM_LBUTTONDBL:
+			// Discard double-click to prevent duplicate window restoration calls
 			return 0
 		case WM_RBUTTONUP:
 			if globalTray != nil {
@@ -151,6 +158,7 @@ func (t *TrayManager) showContextMenu() {
 	if hMenu == 0 {
 		return
 	}
+	defer procDestroyMenu.Call(hMenu)
 
 	openText, _ := syscall.UTF16PtrFromString("Show FoxyVPN")
 	toggleText, _ := syscall.UTF16PtrFromString("Toggle Connect / Disconnect")
@@ -165,6 +173,7 @@ func (t *TrayManager) showContextMenu() {
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	procSetForeground.Call(uintptr(t.hwnd))
 	procTrackPopupMenu.Call(hMenu, uintptr(TPM_RIGHTALIGN|TPM_BOTTOMALIGN), uintptr(pt.x), uintptr(pt.y), 0, uintptr(t.hwnd), 0)
+	procPostMessageW.Call(uintptr(t.hwnd), 0, 0, 0) // WM_NULL required to dismiss menu on desktop outside click
 }
 
 // StartTray initializes the system tray icon and message loop.
@@ -275,6 +284,24 @@ func (t *TrayManager) UpdateTooltip(tip string) {
 	tipChars, _ := syscall.UTF16FromString(tip)
 	copy(t.nid.szTip[:], tipChars)
 	procShellNotifyIconW.Call(uintptr(NIM_MODIFY), uintptr(unsafe.Pointer(&t.nid)))
+}
+
+// ShowNotification displays a balloon tip notification from the tray icon.
+func (t *TrayManager) ShowNotification(title, message string) {
+	if t == nil || t.hwnd == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	nid := t.nid
+	nid.uFlags |= NIF_INFO
+	nid.dwInfoFlags = NIIF_INFO
+	titleChars, _ := syscall.UTF16FromString(title)
+	copy(nid.szInfoTitle[:], titleChars)
+	msgChars, _ := syscall.UTF16FromString(message)
+	copy(nid.szInfo[:], msgChars)
+	procShellNotifyIconW.Call(uintptr(NIM_MODIFY), uintptr(unsafe.Pointer(&nid)))
 }
 
 // Close removes the icon from the system tray and destroys the window.

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { GetSettings, UpdateSettings, QuitApplication } from '../../wailsjs/go/main/App.js';
+  import { GetSettings, UpdateSettings, QuitApplication, ResetSettings } from '../../wailsjs/go/main/App.js';
   import type { settings } from '../../wailsjs/go/models';
 
   export let show = false;
@@ -34,7 +34,9 @@
 
   let activeTab: 'connection' | 'dns' | 'proxy' | 'advanced' | 'system' = 'connection';
   let savedMessage = '';
+  let errorMessage = '';
   let saving = false;
+  let showQuitConfirm = false;
 
   async function loadSettings() {
     try {
@@ -47,18 +49,110 @@
 
   $: if (show) {
     loadSettings();
+    showQuitConfirm = false;
+    errorMessage = '';
+  }
+
+  function focusTrap(node: HTMLElement) {
+    const focusableSelectors = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const focusable = Array.from(node.querySelectorAll<HTMLElement>(focusableSelectors)).filter(
+        el => !el.hasAttribute('disabled') && el.offsetParent !== null
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        }
+      } else {
+        if (document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
+    }
+    node.addEventListener('keydown', handleKeyDown);
+    return {
+      destroy() {
+        node.removeEventListener('keydown', handleKeyDown);
+      }
+    };
   }
 
   async function handleSave() {
+    errorMessage = '';
+    // Port validation
+    if (s.http_proxy_enabled && s.socks_port === s.http_proxy_port) {
+      errorMessage = 'SOCKS5 and HTTP proxy cannot use the same port number';
+      return;
+    }
+    if (s.socks_port < 1024 || s.socks_port > 65535) {
+      errorMessage = 'SOCKS5 port must be between 1024 and 65535';
+      return;
+    }
+    if (s.http_proxy_enabled && (s.http_proxy_port < 1024 || s.http_proxy_port > 65535)) {
+      errorMessage = 'HTTP proxy port must be between 1024 and 65535';
+      return;
+    }
+
     saving = true;
     try {
       await UpdateSettings(s);
       savedMessage = 'Settings saved successfully';
       setTimeout(() => (savedMessage = ''), 2500);
-    } catch (e) {
-      console.error('Failed to save settings:', e);
+    } catch (e: any) {
+      errorMessage = e?.message || 'Failed to save settings';
     } finally {
       saving = false;
+    }
+  }
+
+  async function handleResetDefaults() {
+    errorMessage = '';
+    try {
+      let defaults: settings.AppSettings;
+      if (typeof ResetSettings === 'function') {
+        defaults = await ResetSettings();
+      } else if (window['go']?.['main']?.['App']?.['ResetSettings']) {
+        defaults = await window['go']['main']['App']['ResetSettings']();
+      } else {
+        defaults = {
+          exit_check_enabled: true,
+          dns_provider: 'SYSTEM_DEFAULT',
+          custom_doh_url: '',
+          bootstrap_dns_provider: 'AUTOMATIC',
+          custom_bootstrap_ip: '',
+          socks_port: 1080,
+          socks_bind_address: '127.0.0.1',
+          http_proxy_enabled: true,
+          http_proxy_port: 8080,
+          proxy_only_mode: false,
+          custom_edge_address: '',
+          tls_split_mode: 1,
+          upstream_proxy_enabled: false,
+          upstream_proxy_type: 'SOCKS5',
+          upstream_proxy_host: '',
+          upstream_proxy_port: 1080,
+          upstream_proxy_username: '',
+          upstream_proxy_password: '',
+          minimize_to_tray: true,
+          close_to_tray: true,
+          launch_on_startup: false,
+          bypass_lan: true,
+          custom_bypass_list: '<local>;192.168.0.0/16;10.0.0.0/8;172.16.0.0/12;127.0.0.1;localhost'
+        } as settings.AppSettings;
+        await UpdateSettings(defaults);
+      }
+      if (defaults) s = defaults;
+      savedMessage = 'Settings reset to factory defaults';
+      setTimeout(() => (savedMessage = ''), 2500);
+    } catch (e) {
+      console.error('Failed to reset defaults:', e);
+      errorMessage = 'Failed to reset settings';
     }
   }
 
@@ -80,25 +174,29 @@
     on:click={(e) => { if (e.target === e.currentTarget) onClose(); }}
     on:keydown={(e) => { if (e.key === 'Escape') onClose(); }}
   >
-    <div class="modal-box" role="document">
+    <div class="modal-box" role="document" use:focusTrap>
       <div class="modal-header">
         <h3>Settings & Preferences</h3>
-        <button class="close-btn" on:click={onClose}>✕</button>
+        <button class="close-btn" aria-label="Close settings" on:click={onClose}>✕</button>
       </div>
 
-      <div class="tab-nav">
-        <button class:active={activeTab === 'connection'} on:click={() => (activeTab = 'connection')}>Connection</button>
-        <button class:active={activeTab === 'dns'} on:click={() => (activeTab = 'dns')}>DNS</button>
-        <button class:active={activeTab === 'proxy'} on:click={() => (activeTab = 'proxy')}>Local Proxy</button>
-        <button class:active={activeTab === 'advanced'} on:click={() => (activeTab = 'advanced')}>Anti-Censorship</button>
-        <button class:active={activeTab === 'system'} on:click={() => (activeTab = 'system')}>Desktop</button>
+      <div class="tab-nav" role="tablist" aria-label="Settings categories">
+        <button role="tab" aria-selected={activeTab === 'connection'} class:active={activeTab === 'connection'} on:click={() => (activeTab = 'connection')}>Connection</button>
+        <button role="tab" aria-selected={activeTab === 'dns'} class:active={activeTab === 'dns'} on:click={() => (activeTab = 'dns')}>DNS</button>
+        <button role="tab" aria-selected={activeTab === 'proxy'} class:active={activeTab === 'proxy'} on:click={() => (activeTab = 'proxy')}>Local Proxy</button>
+        <button role="tab" aria-selected={activeTab === 'advanced'} class:active={activeTab === 'advanced'} on:click={() => (activeTab = 'advanced')}>Anti-Censorship</button>
+        <button role="tab" aria-selected={activeTab === 'system'} class:active={activeTab === 'system'} on:click={() => (activeTab = 'system')}>Desktop</button>
       </div>
+
+      {#if errorMessage}
+        <div class="error-toast">{errorMessage}</div>
+      {/if}
 
       {#if savedMessage}
         <div class="save-toast">{savedMessage}</div>
       {/if}
 
-      <div class="tab-body">
+      <div class="tab-body" role="tabpanel">
         {#if activeTab === 'connection'}
           <label class="setting-item">
             <div class="setting-text">
@@ -277,7 +375,16 @@
       </div>
 
       <div class="modal-footer">
-        <button class="btn-quit" on:click={handleQuit}>Quit Application</button>
+        {#if showQuitConfirm}
+          <div class="confirm-group">
+            <span class="confirm-text">Quit FoxyVPN?</span>
+            <button class="btn-danger-confirm" on:click={handleQuit}>Yes, Quit</button>
+            <button class="btn-text-cancel" on:click={() => (showQuitConfirm = false)}>Cancel</button>
+          </div>
+        {:else}
+          <button class="btn-quit" on:click={() => (showQuitConfirm = true)}>Quit App</button>
+          <button class="btn-reset" on:click={handleResetDefaults} title="Reset all settings to defaults">Reset Defaults</button>
+        {/if}
         <button class="btn-cancel" on:click={onClose}>Close</button>
         <button class="btn-save" on:click={handleSave} disabled={saving}>
           {saving ? 'Saving...' : 'Apply & Save'}
@@ -375,6 +482,16 @@
     border-radius: 6px;
     text-align: center;
   }
+  .error-toast {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+    font-size: 0.8rem;
+    padding: 6px 14px;
+    margin: 8px 16px 0;
+    border-radius: 6px;
+    text-align: center;
+  }
   .tab-body {
     flex: 1;
     min-height: 0;
@@ -462,6 +579,38 @@
     justify-content: flex-end;
     gap: 10px;
   }
+  .confirm-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: auto;
+  }
+  .confirm-text {
+    font-size: 0.78rem;
+    color: #fca5a5;
+    font-weight: 600;
+  }
+  .btn-danger-confirm {
+    background: #ef4444;
+    border: none;
+    color: white;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-danger-confirm:hover {
+    filter: brightness(1.15);
+  }
+  .btn-text-cancel {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 0.76rem;
+    cursor: pointer;
+    text-decoration: underline;
+  }
   .btn-quit {
     background: rgba(239, 68, 68, 0.12);
     border: 1px solid rgba(239, 68, 68, 0.25);
@@ -476,6 +625,20 @@
   }
   .btn-quit:hover {
     background: rgba(239, 68, 68, 0.22);
+  }
+  .btn-reset {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-dim);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-reset:hover {
+    color: white;
+    background: rgba(255, 255, 255, 0.1);
   }
   .btn-cancel {
     background: rgba(255, 255, 255, 0.08);

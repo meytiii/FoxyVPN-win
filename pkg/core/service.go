@@ -202,14 +202,18 @@ func (s *VpnService) RegisterListener(listener func(status VpnStatus)) {
 }
 
 func (s *VpnService) notifyListeners() {
-	status := s.GetStatus()
-	s.mu.RLock()
-	listeners := append([]func(status VpnStatus){}, s.statusListeners...)
-	s.mu.RUnlock()
+	go func() {
+		status := s.GetStatus()
+		s.mu.RLock()
+		listeners := append([]func(status VpnStatus){}, s.statusListeners...)
+		s.mu.RUnlock()
 
-	for _, l := range listeners {
-		l(status)
-	}
+		for _, l := range listeners {
+			if l != nil {
+				l(status)
+			}
+		}
+	}()
 }
 
 func (s *VpnService) fetchInitialDirectIP() {
@@ -456,12 +460,12 @@ func (s *VpnService) verifyExitAfterConnect() {
 
 func (s *VpnService) Disconnect() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.state = StateDisconnected
 	s.errorMessage = ""
 	s.isProtected = false
 	err := s.executeDisconnect()
+	s.mu.Unlock()
+
 	s.notifyListeners()
 	logger.GetLogger().Info("Tunnel", "Tunnel disconnected")
 	return err

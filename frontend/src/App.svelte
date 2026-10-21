@@ -151,19 +151,23 @@
   async function handleToggleConnect() {
     if (status.state === 'CONNECTED') {
       try {
+        status.state = 'DISCONNECTED';
         await Disconnect();
+        await refreshStatus();
       } catch (e) {
         console.error('Disconnect error:', e);
       }
-    } else if (status.state === 'DISCONNECTED' || status.state === 'ERROR') {
+    } else {
       if (!status.is_signed_in) {
         showAccountModal = true;
         return;
       }
       try {
+        status.state = 'CONNECTING';
         await Connect();
       } catch (e) {
         console.error('Connect error:', e);
+        status.state = 'ERROR';
       }
     }
   }

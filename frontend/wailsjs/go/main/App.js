@@ -66,6 +66,10 @@ export function PingServer(arg1, arg2) {
   return window['go']['main']['App']['PingServer'](arg1, arg2);
 }
 
+export function QuitApplication() {
+  return window['go']['main']['App']['QuitApplication']();
+}
+
 export function SetSelectedCountry(arg1, arg2) {
   return window['go']['main']['App']['SetSelectedCountry'](arg1, arg2);
 }

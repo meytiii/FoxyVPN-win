@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { SetSelectedCountry, PingAllServers } from '../../wailsjs/go/main/App.js';
+  import { SetSelectedCountry, PingAllServers, GetCountries } from '../../wailsjs/go/main/App.js';
   import type { remotesettings } from '../../wailsjs/go/models';
 
   export let show = false;
@@ -16,6 +16,17 @@
   let pinging = false;
   let expanded: Record<string, boolean> = {};
 
+  async function ensureCountries() {
+    if (!countries || countries.length === 0) {
+      try {
+        const loaded = await GetCountries();
+        if (loaded && loaded.length > 0) countries = loaded;
+      } catch (e) {
+        console.error('Failed loading countries:', e);
+      }
+    }
+  }
+
   async function refreshPings() {
     pinging = true;
     try {
@@ -29,8 +40,13 @@
   }
 
   $: if (show) {
+    ensureCountries();
     refreshPings();
   }
+
+  onMount(() => {
+    ensureCountries();
+  });
 
   function getCountryFlag(code: string): string {
     if (!code || code === 'REC' || code.length !== 2) return '🌐';
@@ -230,26 +246,25 @@
   .drawer-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.8);
     backdrop-filter: blur(8px);
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: center;
     z-index: 1000;
   }
   .drawer-panel {
-    width: 100%;
+    width: 92%;
     max-width: 420px;
-    height: 100%;
-    background: #0d101a;
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    height: 85vh;
+    max-height: 640px;
+    background: #0f121d;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
     display: flex;
     flex-direction: column;
-    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.6);
-    animation: slideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  @keyframes slideIn {
-    from { transform: translateX(100%); }
-    to { transform: translateX(0); }
+    overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
   }
   .drawer-header {
     padding: 18px 20px;
@@ -260,7 +275,9 @@
   }
   .header-left h3 {
     font-size: 1.05rem;
-    font-weight: 600;
+    font-weight: 700;
+    color: white;
+    margin: 0;
   }
   .location-count {
     font-size: 0.75rem;
@@ -283,6 +300,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: all 0.2s;
   }
   .refresh-btn:hover {
     color: white;
@@ -301,9 +319,11 @@
     font-size: 1.2rem;
     cursor: pointer;
     padding: 4px;
+    border-radius: 6px;
   }
   .close-btn:hover {
     color: white;
+    background: rgba(255, 255, 255, 0.08);
   }
   .search-bar {
     padding: 12px 18px;
@@ -338,6 +358,7 @@
     padding: 4px 8px;
     border-radius: 6px;
     cursor: pointer;
+    transition: all 0.2s;
   }
   .sort-toggle button.active {
     background: rgba(255, 255, 255, 0.15);
@@ -347,10 +368,10 @@
   .country-list {
     flex: 1;
     overflow-y: auto;
-    padding: 10px 14px;
+    padding: 12px 16px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .country-group {
     background: rgba(255, 255, 255, 0.02);
@@ -385,45 +406,43 @@
   .name-box {
     display: flex;
     flex-direction: column;
+    gap: 2px;
   }
   .country-name {
     font-size: 0.88rem;
     font-weight: 600;
-    color: var(--text-white);
+    color: white;
   }
   .sub-label {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     color: var(--text-dim);
   }
   .country-meta {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
   }
   .ping-chip {
-    font-size: 0.72rem;
-    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
     padding: 2px 7px;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-muted);
+    border-radius: 4px;
+    font-family: var(--font-mono);
   }
   .ping-chip.fast {
     background: rgba(16, 185, 129, 0.15);
     color: #10b981;
-    border: 1px solid rgba(16, 185, 129, 0.3);
   }
   .ping-chip.mid {
-    background: rgba(6, 182, 212, 0.15);
-    color: #38bdf8;
-    border: 1px solid rgba(6, 182, 212, 0.3);
-  }
-  .ping-chip.slow {
     background: rgba(245, 158, 11, 0.15);
     color: #f59e0b;
-    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+  .ping-chip.slow {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
   }
   .ping-chip.pinging {
+    background: rgba(255, 255, 255, 0.05);
     color: var(--text-dim);
   }
   .expand-caret {
@@ -436,23 +455,25 @@
   }
   .check-icon {
     color: var(--fox-primary);
-    font-weight: bold;
+    font-weight: 800;
   }
   .city-sublist {
     background: rgba(0, 0, 0, 0.25);
     border-top: 1px solid rgba(255, 255, 255, 0.04);
-    padding: 4px 0;
+    display: flex;
+    flex-direction: column;
   }
   .city-row {
-    padding: 8px 14px 8px 36px;
+    padding: 10px 14px 10px 38px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     cursor: pointer;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
     transition: background 0.15s;
   }
   .city-row:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.03);
   }
   .city-row.selected {
     background: rgba(255, 102, 0, 0.1);
@@ -467,16 +488,16 @@
     font-size: 0.8rem;
   }
   .city-name {
-    font-size: 0.82rem;
-    color: var(--text-white);
+    font-size: 0.8rem;
+    color: white;
   }
   .server-count {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     color: var(--text-dim);
   }
   .city-meta {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
   }
 </style>

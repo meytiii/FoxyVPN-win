@@ -10,6 +10,7 @@ import (
 	"foxyvpn/pkg/logger"
 	"foxyvpn/pkg/remotesettings"
 	"foxyvpn/pkg/settings"
+	"foxyvpn/pkg/winutil"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -17,6 +18,7 @@ import (
 type App struct {
 	ctx     context.Context
 	service *core.VpnService
+	tray    *winutil.TrayManager
 }
 
 // NewApp creates a new App application instance.
@@ -38,6 +40,13 @@ func (a *App) startup(ctx context.Context) {
 			if a.ctx != nil {
 				runtime.EventsEmit(a.ctx, "vpn:status", status)
 			}
+			if a.tray != nil {
+				tip := fmt.Sprintf("FoxyVPN - %s", status.State)
+				if status.State == core.StateConnected {
+					tip = fmt.Sprintf("FoxyVPN - Protected (%s)", status.SelectedCountry)
+				}
+				a.tray.UpdateTooltip(tip)
+			}
 		})
 		logger.GetLogger().RegisterListener(func(entry logger.LogEntry) {
 			if a.ctx != nil {
@@ -48,10 +57,48 @@ func (a *App) startup(ctx context.Context) {
 			_, _ = a.service.RestoreSession()
 		}()
 	}
+
+	// Initialize Windows notification area system tray
+	tm, err := winutil.StartTray(
+		"FoxyVPN - Not Connected",
+		func() {
+			if a.ctx != nil {
+				runtime.WindowShow(a.ctx)
+				runtime.WindowUnminimise(a.ctx)
+			}
+		},
+		func() {
+			if a.service != nil {
+				st := a.service.GetStatus()
+				if st.State == core.StateConnected {
+					_ = a.service.Disconnect()
+				} else {
+					_ = a.service.Connect()
+				}
+			}
+		},
+		func() {
+			if a.ctx != nil {
+				if a.service != nil {
+					_ = a.service.Disconnect()
+				}
+				if a.tray != nil {
+					a.tray.Close()
+				}
+				runtime.Quit(a.ctx)
+			}
+		},
+	)
+	if err == nil {
+		a.tray = tm
+	}
 }
 
 // shutdown is called before the application terminates.
 func (a *App) shutdown(ctx context.Context) {
+	if a.tray != nil {
+		a.tray.Close()
+	}
 	if a.service != nil {
 		_ = a.service.Disconnect()
 	}
@@ -200,4 +247,17 @@ func (a *App) CheckProxiedIp(socksPort int) (*exitcheck.IpLocationInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return checker.FetchProxiedIpInfo(ctx, socksPort)
+}
+
+// QuitApplication cleanly shuts down the application and releases all resources.
+func (a *App) QuitApplication() {
+	if a.service != nil {
+		_ = a.service.Disconnect()
+	}
+	if a.tray != nil {
+		a.tray.Close()
+	}
+	if a.ctx != nil {
+		runtime.Quit(a.ctx)
+	}
 }

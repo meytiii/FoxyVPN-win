@@ -1,34 +1,23 @@
 package main
 
 import (
+	"context"
 	"embed"
-	"fmt"
-	"os"
 
-	"foxyvpn/pkg/logger"
-	"foxyvpn/pkg/winutil"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
-	// Single instance mutex lock
-	lock, err := winutil.AcquireSingleInstance()
-	if err != nil {
-		fmt.Println("Another instance of FoxyVPN is already running.")
-		logger.GetLogger().Warn("Main", "Another instance of FoxyVPN is already running. Exiting.")
-		os.Exit(0)
-	}
-	defer lock.Release()
-
 	app := NewApp()
 
-	err = wails.Run(&options.App{
+	err := wails.Run(&options.App{
 		Title:         "FoxyVPN",
 		Width:         430,
 		Height:        720,
@@ -41,6 +30,23 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 11, G: 13, B: 20, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			cfg := app.GetSettings()
+			if cfg.CloseToTray {
+				runtime.WindowHide(ctx)
+				return true
+			}
+			return false
+		},
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "foxyvpn-desktop-app-lock-uuid",
+			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
+				if app.ctx != nil {
+					runtime.WindowShow(app.ctx)
+					runtime.WindowUnminimise(app.ctx)
+				}
+			},
+		},
 		EnableDefaultContextMenu: true,
 		Bind: []interface{}{
 			app,

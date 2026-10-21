@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { GetSettings, UpdateSettings } from '../../wailsjs/go/main/App.js';
+  import { GetSettings, UpdateSettings, QuitApplication } from '../../wailsjs/go/main/App.js';
   import type { settings } from '../../wailsjs/go/models';
 
   export let show = false;
@@ -59,6 +59,14 @@
       console.error('Failed to save settings:', e);
     } finally {
       saving = false;
+    }
+  }
+
+  async function handleQuit() {
+    try {
+      await QuitApplication();
+    } catch (e) {
+      console.error('Failed to quit:', e);
     }
   }
 </script>
@@ -269,6 +277,7 @@
       </div>
 
       <div class="modal-footer">
+        <button class="btn-quit" on:click={handleQuit}>Quit Application</button>
         <button class="btn-cancel" on:click={onClose}>Close</button>
         <button class="btn-save" on:click={handleSave} disabled={saving}>
           {saving ? 'Saving...' : 'Apply & Save'}
@@ -447,8 +456,24 @@
     background: rgba(255, 255, 255, 0.02);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 10px;
+  }
+  .btn-quit {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    color: #ef4444;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-right: auto;
+    transition: all 0.2s;
+  }
+  .btn-quit:hover {
+    background: rgba(239, 68, 68, 0.22);
   }
   .btn-cancel {
     background: rgba(255, 255, 255, 0.08);

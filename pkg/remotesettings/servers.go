@@ -62,51 +62,68 @@ type ServerRepository struct {
 
 func NewServerRepository(cacheDir string) *ServerRepository {
 	_ = os.MkdirAll(cacheDir, 0700)
-	return &ServerRepository{
+	repo := &ServerRepository{
 		cachePath: filepath.Join(cacheDir, "vpn_serverlist_cache.json"),
 		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: 4 * time.Second,
 		},
+		countries: BuiltinFallbackCountries(),
 	}
+	cached := repo.loadCache()
+	if len(cached) > 0 {
+		repo.countries = cached
+	}
+	return repo
 }
 
-// FetchCountries retrieves the latest server list from Remote Settings or falls back to cache/builtins.
+// FetchCountries returns available countries immediately from memory/cache, and refreshes remote settings in background.
 func (r *ServerRepository) FetchCountries() ([]VpnCountry, error) {
-	req, err := http.NewRequest(http.MethodGet, RemoteSettingsURL, nil)
-	if err == nil {
-		req.Header.Set("User-Agent", MozillaVpnUserAgent)
-		req.Header.Set("Accept", "application/json")
+	r.mu.RLock()
+	current := r.countries
+	r.mu.RUnlock()
 
-		resp, err := r.httpClient.Do(req)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			defer resp.Body.Close()
-			bodyBytes, readErr := io.ReadAll(resp.Body)
-			if readErr == nil && len(bodyBytes) > 0 {
-				countries := parseRecords(bodyBytes)
-				if len(countries) > 0 {
-					_ = os.WriteFile(r.cachePath, bodyBytes, 0644)
-					r.mu.Lock()
-					r.countries = countries
-					r.mu.Unlock()
-					return countries, nil
-				}
-			}
+	if len(current) == 0 {
+		current = r.loadCache()
+		if len(current) == 0 {
+			current = BuiltinFallbackCountries()
 		}
-	}
-
-	cached := r.loadCache()
-	if len(cached) > 0 {
 		r.mu.Lock()
-		r.countries = cached
+		r.countries = current
 		r.mu.Unlock()
-		return cached, nil
 	}
 
-	fallback := BuiltinFallbackCountries()
-	r.mu.Lock()
-	r.countries = fallback
-	r.mu.Unlock()
-	return fallback, nil
+	// Asynchronously fetch latest remote list without blocking caller
+	go r.refreshRemote()
+
+	return current, nil
+}
+
+func (r *ServerRepository) refreshRemote() {
+	req, err := http.NewRequest(http.MethodGet, RemoteSettingsURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("User-Agent", MozillaVpnUserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil || len(bodyBytes) == 0 {
+		return
+	}
+
+	countries := parseRecords(bodyBytes)
+	if len(countries) > 0 {
+		_ = os.WriteFile(r.cachePath, bodyBytes, 0644)
+		r.mu.Lock()
+		r.countries = countries
+		r.mu.Unlock()
+	}
 }
 
 func (r *ServerRepository) loadCache() []VpnCountry {
